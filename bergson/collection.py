@@ -107,6 +107,9 @@ def collect_gradients(
                 # Compute average KL across all unmasked tokens
                 kls = torch.sum(ft_lps.exp() * (ft_lps - ref_lps), dim=-1)
                 losses = torch.sum(kls * masks, dim=-1) / denoms
+                if "advantage" in batch:
+                    losses *= torch.tensor(batch["advantage"], device=losses.device)
+
                 losses.mean().backward()
         else:
             with collector:
@@ -118,6 +121,9 @@ def collect_gradients(
                     reduction="none",
                 ).reshape_as(y[:, 1:])
                 losses = losses.sum(1) / denoms
+                if "advantage" in batch:
+                    losses *= torch.tensor(batch["advantage"], device=losses.device)
+
                 losses.mean().backward()
 
         # Weirdly you need to explicitly synchronize here in order to make sure that
@@ -133,18 +139,8 @@ def collect_gradients(
         mod_grads.clear()
         per_doc_losses[indices] = losses.detach().type_as(per_doc_losses)
 
-    chols = {}
-    for name, prec in preconditioners.items():
-        if dist.is_initialized():
-            dist.all_reduce(prec)
+    process_preconditioners(processor, preconditioners, len(data))
 
-        L, info = torch.linalg.cholesky_ex(prec / len(data))
-        if info.any() and rank == 0:
-            print(f"Warning: {name} has a singular second moment matrix.")
-
-        chols[name] = L
-
-    processor.preconditioners = chols
     if dist.is_initialized():
         dist.reduce(per_doc_losses, dst=0)
 
@@ -161,3 +157,59 @@ def collect_gradients(
 
     # Make sure the gradients are written to disk
     grad_buffer.flush()
+
+
+def process_preconditioners(
+    processor: GradientProcessor,
+    preconditioners: dict[str, torch.Tensor],
+    len_data: int,
+):
+    """
+    Aggregate preconditioners across ranks and compute their eigen decomposition
+    distributed across all ranks.
+    """
+
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    preconditioners_eigen = {}
+    if rank == 0:
+        print("Saving preconditioners...")
+    for name, prec in preconditioners.items():
+        if dist.is_initialized():
+            dist.all_reduce(prec)
+
+        preconditioners[name] = prec / len_data
+
+    processor.preconditioners = preconditioners
+
+    if rank == 0:
+        print("Computing preconditioner eigen decompositions...")
+    names = list(preconditioners.keys())
+    names_per_rank = names[rank::world_size]
+
+    for name in names_per_rank:
+        original_dtype = preconditioners[name].dtype
+        prec = preconditioners[name].to(dtype=torch.float64)
+        eigvals, eigvecs = torch.linalg.eigh(prec)
+        preconditioners_eigen[name] = (
+            eigvals.to(dtype=original_dtype).contiguous(),
+            eigvecs.to(dtype=original_dtype).contiguous(),
+        )
+
+    if rank == 0:
+        print("Gathering and saving preconditioner eigen decompositions...")
+
+    for name in names:
+        prec = preconditioners[name]
+        if name not in preconditioners_eigen:
+            eigval = torch.zeros(prec.size(0), dtype=prec.dtype, device=prec.device)
+            eigvec = torch.zeros_like(prec)
+        else:
+            eigval, eigvec = preconditioners_eigen[name]
+
+        dist.all_reduce(eigval, op=dist.ReduceOp.SUM) if dist.is_initialized() else None
+        dist.all_reduce(eigvec, op=dist.ReduceOp.SUM) if dist.is_initialized() else None
+
+        preconditioners_eigen[name] = (eigval, eigvec)
+    if rank == 0:
+        processor.preconditioners_eigen = preconditioners_eigen

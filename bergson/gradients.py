@@ -181,6 +181,15 @@ class GradientProcessor:
     These are applied after the normalization and random projection steps.
     """
 
+    preconditioners_eigen: Mapping[str, tuple[Tensor, Tensor]] = field(
+        default_factory=dict
+    )
+    """
+    Dictionary of eigen decompositions of preconditioners for each matrix-valued
+    parameter in the model. Each value is a tuple of (eigenvalues, eigenvectors).
+    These are used to efficiently apply inverse square-root of the preconditioners
+    to the gradients."""
+
     projection_dim: int | None = None
     """Number of rows and columns to project the gradients to. If `None`, keep the
     original shape of the gradients."""
@@ -215,6 +224,7 @@ class GradientProcessor:
         cfg_path = os.path.join(path, "processor_config.json")
         norm_path = os.path.join(path, "normalizers.pth")
         precond_path = os.path.join(path, "preconditioners.pth")
+        precond_eigen_path = os.path.join(path, "preconditioners_eigen.pth")
 
         # Load configuration
         with open(cfg_path, "r") as f:
@@ -242,6 +252,11 @@ class GradientProcessor:
                 map_location=map_location,
                 weights_only=True,
             ),
+            preconditioners_eigen=torch.load(
+                precond_eigen_path,
+                map_location=map_location,
+                weights_only=True,
+            ),
             **cfg,
         )
 
@@ -254,11 +269,13 @@ class GradientProcessor:
         cfg_path = os.path.join(path, "processor_config.json")
         norm_path = os.path.join(path, "normalizers.pth")
         precond_path = os.path.join(path, "preconditioners.pth")
+        precond_eigen_path = os.path.join(path, "preconditioners_eigen.pth")
 
         # Save configuration separately
         cfg = asdict(self)
         del cfg["normalizers"]
         del cfg["preconditioners"]
+        del cfg["preconditioners_eigen"]
         with open(cfg_path, "w") as f:
             json.dump(cfg, f, indent=2)
 
@@ -269,6 +286,7 @@ class GradientProcessor:
         }
         torch.save(norm_state, norm_path)
         torch.save(self.preconditioners, precond_path)
+        torch.save(self.preconditioners_eigen, precond_eigen_path)
 
 
 @dataclass

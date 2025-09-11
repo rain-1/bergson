@@ -342,9 +342,11 @@ class Attributor:
         def callback(name: str, g: Tensor):
             # Precondition the gradient using Cholesky solve
             if precondition:
-                P = self.processor.preconditioners[name]
+                eigval, eigvec = self.processor.preconditioners_eigen[name]
+                eigval_inverse_sqrt = 1.0 / (eigval).sqrt()
+                P = eigvec * eigval_inverse_sqrt @ eigvec.mT
                 g = g.flatten(1).type_as(P)
-                g = torch.cholesky_solve(g.mT, P).mT
+                g = g @ P
             else:
                 g = g.flatten(1)
 

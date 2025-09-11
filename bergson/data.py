@@ -41,6 +41,11 @@ class DataConfig:
     conversation_column: str = ""
     """Optional column in the dataset that contains the conversation."""
 
+    reward_column: str = ""
+    """Optional column in the dataset that contains the rewards.
+    When specified, gradients are calculated using the policy
+    gradient loss from Dr. GRPO. https://arxiv.org/abs/2503.20783"""
+
     truncation: bool = False
     """Whether to truncate long documents to fit the token budget."""
 

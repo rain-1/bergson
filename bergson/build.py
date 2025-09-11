@@ -3,6 +3,7 @@ import socket
 from datetime import timedelta
 from typing import cast
 
+import pandas as pd
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -80,7 +81,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset | IterableD
             cfg.model,
             device_map=device_map,
             quantization_config=quantization_config,
-            torch_dtype=dtype,
+            dtype=dtype,
             revision=cfg.revision,
         )
         target_modules = None
@@ -91,7 +92,7 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset | IterableD
             peft_config.base_model_name_or_path,  # type: ignore
             device_map=device_map,
             quantization_config=quantization_config,
-            torch_dtype=dtype,
+            dtype=dtype,
             revision=cfg.revision,
         )
 
@@ -190,6 +191,20 @@ def dist_worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
         dist.destroy_process_group()
 
 
+def estimate_advantage(ds: Dataset, cfg: IndexConfig):
+    """Group rollouts by prompt and estimate advantages."""
+    assert isinstance(ds, Dataset), "Dataset required for advantage estimation"
+
+    df = ds.select_columns([cfg.data.prompt_column, cfg.data.reward_column]).to_pandas()
+    df = assert_type(pd.DataFrame, df)
+
+    advantages = df[cfg.data.reward_column] - df.groupby(cfg.data.prompt_column)[
+        cfg.data.reward_column
+    ].transform("mean")
+
+    return advantages.tolist()
+
+
 def build_gradient_dataset(cfg: IndexConfig):
     # In many cases the token_batch_size may be smaller than the max length allowed by
     # the model. If cfg.data.truncation is True, we use the tokenizer to truncate
@@ -206,6 +221,13 @@ def build_gradient_dataset(cfg: IndexConfig):
         fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer),
         remove_columns=remove_columns,
     )
+    if cfg.data.reward_column:
+        ds = ds.add_column(
+            "advantage",
+            estimate_advantage(ds, cfg),
+            new_fingerprint="advantage",  # type: ignore
+        )
+
     world_size = torch.cuda.device_count()
     if world_size <= 1:
         # Run the worker directly if no distributed training is needed. This is great
