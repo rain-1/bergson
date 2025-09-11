@@ -242,8 +242,6 @@ class GradientCollectorCallback(TrainerCallback):
         # Read normalizers off of the optimizer state. We need to figure out
         # what type of optimizer this is first.
         for group in optimizer.param_groups:
-            lr_sqrt = group["lr"] ** 0.5
-
             for param in group["params"]:
                 name = param_to_name[param].removesuffix(".weight")
                 if name not in self.collector.target_info:
@@ -262,10 +260,6 @@ class GradientCollectorCallback(TrainerCallback):
                 else:
                     continue
 
-                # Scale the gradient by the current learning rate. It's factorized
-                # so we multiply each factor by the square root of the LR.
-                norm.row *= lr_sqrt
-                norm.col *= lr_sqrt
                 normalizers[name] = norm
 
         proc.normalizers = normalizers
