@@ -9,6 +9,7 @@ from bergson.gradients import (
     AdamNormalizer,
     GradientCollector,
     GradientProcessor,
+    LayerAdapter,
 )
 
 
@@ -43,14 +44,16 @@ def test_phi3():
         for name, collected_grad in collected_grads.items():
             layer = model.get_submodule(name)
 
-            o, i = layer.out_features, layer.in_features
+            i = getattr(layer, LayerAdapter.in_attr(layer))
+            o = getattr(layer, LayerAdapter.out_attr(layer))
+
             g = layer.weight.grad
             assert g is not None
 
             moments = g.square()
             if p is not None:
-                A = collector.projection(name, p, o, "left", g.dtype)
-                B = collector.projection(name, p, i, "right", g.dtype)
+                A = collector.projection(name, p, o, "left", g.device, g.dtype)
+                B = collector.projection(name, p, i, "right", g.device, g.dtype)
                 g = A @ g @ B.T
 
             torch.testing.assert_close(g, collected_grad.squeeze(0))
@@ -64,12 +67,12 @@ def test_phi3():
             previous_collected_grads = {}
             for do_load in (False, True):
                 if do_load:
-                    processor = GradientProcessor.load(temp_dir / "processor")
+                    processor = GradientProcessor.load(str(temp_dir / "processor"))
                 else:
                     processor = GradientProcessor(
                         normalizers=normalizers, projection_dim=p
                     )
-                    processor.save(temp_dir / "processor")
+                    processor.save(str(temp_dir / "processor"))
                 collector = GradientCollector(model, closure, processor)
                 with collector:
                     model.zero_grad()
@@ -77,15 +80,15 @@ def test_phi3():
 
                 for name, collected_grad in collected_grads.items():
                     layer = model.get_submodule(name)
-
-                    o, i = layer.out_features, layer.in_features
+                    i = getattr(layer, LayerAdapter.in_attr(layer))
+                    o = getattr(layer, LayerAdapter.out_attr(layer))
                     g = layer.weight.grad
                     assert g is not None
 
                     g = normalizers[name].normalize_(g)
                     if p is not None:
-                        A = collector.projection(name, p, o, "left", g.dtype)
-                        B = collector.projection(name, p, i, "right", g.dtype)
+                        A = collector.projection(name, p, o, "left", g.device, g.dtype)
+                        B = collector.projection(name, p, i, "right", g.device, g.dtype)
                         g = A @ g @ B.T
 
                     # Compare the normalized gradient with the collected gradient. We

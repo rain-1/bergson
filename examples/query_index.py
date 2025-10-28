@@ -3,7 +3,7 @@ from argparse import ArgumentParser
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson import Attributor
+from bergson import Attributor, FaissConfig
 
 
 def main():
@@ -12,16 +12,18 @@ def main():
     parser.add_argument(
         "--model", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct"
     )
-    parser.add_argument("--dataset", type=str, default="EleutherAI/SmolLM2-135M-10B")
+    parser.add_argument("--dataset", type=str, default="RonenEldan/TinyStories")
     parser.add_argument("--text_field", type=str, default="text")
     parser.add_argument("--unit_norm", action="store_true")
+    parser.add_argument("--faiss", action="store_true")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model, device_map={"": "cuda:0"})
     dataset = load_dataset(args.dataset, split="train")
 
-    attr = Attributor(args.index, device="cuda:0")
+    faiss_cfg = FaissConfig() if args.faiss else None
+    attr = Attributor(args.index, device="cuda", faiss_cfg=faiss_cfg)
 
     # Query loop
     while True:

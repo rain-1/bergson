@@ -1,5 +1,5 @@
 import math
-from typing import Literal
+from typing import Callable, Literal
 
 import numpy as np
 import torch
@@ -10,10 +10,7 @@ from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 
 from .data import create_index, pad_and_tensor
-from .gradients import (
-    GradientCollector,
-    GradientProcessor,
-)
+from .gradients import AttentionConfig, GradientCollector, GradientProcessor
 from .peft import set_peft_enabled
 
 
@@ -28,11 +25,19 @@ def collect_gradients(
     loss_reduction: Literal["mean", "sum"] = "mean",
     skip_preconditioners: bool = False,
     target_modules: set[str] | None = None,
+    attention_cfgs: dict[str, AttentionConfig] | None = None,
+    save_index: bool = True,
+    save_processor: bool = True,
+    drop_columns: bool = False,
+    query_callback: Callable[[dict[str, torch.Tensor]], torch.Tensor] | None = None,
 ):
     """
     Compute projected gradients using a subset of the dataset.
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
+
+    if attention_cfgs is None:
+        attention_cfgs = {}
 
     # Batch size of one by default
     if batches is None:
@@ -40,7 +45,7 @@ def collect_gradients(
 
     # Mutable state for the GradientCollector callback
     mod_grads = {}
-    preconditioners = {}
+    preconditioners = processor.preconditioners
 
     # TODO: Handle this more elegantly
     dtype = torch.float32 if model.dtype == torch.float32 else torch.float16
@@ -50,9 +55,11 @@ def collect_gradients(
 
     def callback(name: str, g: torch.Tensor):
         g = g.flatten(1).clamp_(lo, hi)
-
-        # Asynchronously move the gradient to CPU and convert to fp16
-        mod_grads[name] = g.to(device="cpu", dtype=dtype, non_blocking=True)
+        if save_index:
+            # Asynchronously move the gradient to CPU and convert to the final dtype
+            mod_grads[name] = g.to(device="cpu", dtype=dtype, non_blocking=True)
+        else:
+            mod_grads[name] = g.to(dtype=dtype)
 
         # Compute the outer product of the flattened gradient
         if not skip_preconditioners:
@@ -68,17 +75,26 @@ def collect_gradients(
         callback,
         processor,
         target_modules=target_modules,
+        attention_cfgs=attention_cfgs,
     )
 
     # Allocate space ahead of time for the gradients
     grad_sizes = {name: math.prod(s) for name, s in collector.shapes().items()}
 
     # Allocate structured space ahead of time for the gradients
-    grad_buffer = create_index(
-        path, num_grads=len(data), grad_sizes=grad_sizes, dtype=np_dtype
+    grad_buffer = (
+        create_index(path, num_grads=len(data), grad_sizes=grad_sizes, dtype=np_dtype)
+        if save_index
+        else None
     )
 
     per_doc_losses = torch.full(
+        (len(data),),
+        device=model.device,
+        dtype=dtype,
+        fill_value=0.0,
+    )
+    per_doc_scores = torch.full(
         (len(data),),
         device=model.device,
         dtype=dtype,
@@ -126,15 +142,23 @@ def collect_gradients(
 
                 losses.mean().backward()
 
-        # Weirdly you need to explicitly synchronize here in order to make sure that
-        # the nonblocking copies actually finish before we call .numpy()
         model.zero_grad()
-        torch.cuda.synchronize()
 
-        # It turns out that it's very important for efficiency to write the gradients
-        # sequentially instead of first concatenating them, then writing to one vector
-        for layer_name in mod_grads.keys():
-            grad_buffer[layer_name][indices] = mod_grads[layer_name].numpy()
+        if grad_buffer is not None:
+            # Weirdly you need to explicitly synchronize here in order to make
+            # sure that the nonblocking copies actually finish before we call
+            # .numpy()
+            torch.cuda.synchronize()
+
+            # It turns out that it's very important for efficiency to write the
+            # gradients sequentially instead of first concatenating them, then
+            # writing to one vector
+            for module_name in mod_grads.keys():
+                grad_buffer[module_name][indices] = mod_grads[module_name].numpy()
+
+        if query_callback is not None:
+            scores = query_callback(mod_grads)
+            per_doc_scores[indices] = scores.detach().type_as(per_doc_scores)
 
         mod_grads.clear()
         per_doc_losses[indices] = losses.detach().type_as(per_doc_losses)
@@ -145,18 +169,29 @@ def collect_gradients(
         dist.reduce(per_doc_losses, dst=0)
 
     if rank == 0:
+        if drop_columns:
+            data = data.remove_columns(["input_ids"])
+
         data = data.add_column(
             "loss",
             per_doc_losses.cpu().numpy(),
             feature=Value("float16" if dtype == torch.float16 else "float32"),
             new_fingerprint="loss",
         )
+        data = data.add_column(
+            "scores",
+            per_doc_scores.cpu().numpy(),
+            feature=Value("float16" if dtype == torch.float16 else "float32"),
+            new_fingerprint="scores",
+        )
         data.save_to_disk(path + "/data.hf")
 
-        processor.save(path)
+        if save_processor:
+            processor.save(path)
 
     # Make sure the gradients are written to disk
-    grad_buffer.flush()
+    if grad_buffer is not None:
+        grad_buffer.flush()
 
 
 def process_preconditioners(

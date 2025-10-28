@@ -179,3 +179,11 @@ cache/
 
 wandb/
 .vscode/
+
+# R&D directories
+figures/
+results/
+prototype/
+influence_results/
+.idea/
+uv.lock

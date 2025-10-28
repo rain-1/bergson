@@ -1,11 +1,13 @@
 import math
 import os
 from functools import wraps
+from itertools import chain
 from typing import Sized
 
 import numpy as np
 import torch
 import torch.distributed as dist
+from datasets import Dataset
 from numpy.typing import DTypeLike
 from peft import PeftModel
 from torch import Tensor
@@ -14,7 +16,7 @@ from transformers.trainer import Trainer
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
 
-from bergson import GradientCollector, GradientProcessor
+from bergson import AttentionConfig, GradientCollector, GradientProcessor
 from bergson.data import create_index
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer
 from bergson.peft import detect_peft_modules
@@ -27,15 +29,19 @@ class GradientCollectorCallback(TrainerCallback):
     def __init__(
         self,
         path: str,
+        attention_cfgs: dict[str, AttentionConfig] = {},
         projection_dim: int = 16,
+        include_bias: bool = False,
         dtype: DTypeLike = np.float16,
         accumulate_grads: bool = False,
         use_optimizer_state: bool = True,
+        track_order: bool = False,
     ):
         """
         Args:
-            grad_sizes: The sizes of the module gradients
+            path: The path to save the gradients
             projection_dim: The dimension to project the gradients onto
+            include_bias: Whether to append bias gradients when present on a module
             dtype: The dtype of the on-disk gradient store
             accumulate_grads: Whether to take the sum of the gradients
                 of the same example across epochs. If `False`, the
@@ -43,6 +49,9 @@ class GradientCollectorCallback(TrainerCallback):
             use_optimizer_state: Whether to use the optimizer state to
                 normalize the gradients. If `False`, no normalization is
                 applied.
+            track_order: Whether to record the shuffled order of training data.
+        attention_cfgs: Information used to split matrix-valued parameters into
+            per-head matrices before down projection.
         """
         super().__init__()
 
@@ -50,11 +59,14 @@ class GradientCollectorCallback(TrainerCallback):
         self.collector = None
         self.grad_sizes = {}
 
+        self.attention_cfgs = attention_cfgs
         self.accumulate_grads = accumulate_grads
         self.dtype = dtype
         self.path = path
         self.projection_dim = projection_dim
+        self.include_bias = include_bias
         self.use_optimizer_state = use_optimizer_state
+        self.order: list[dict] | None = [] if track_order else None
 
         self.eval_grad_buffers: dict[str, np.memmap] = {}
         self.eval_step_idxs: dict[str, int] = {}
@@ -62,6 +74,9 @@ class GradientCollectorCallback(TrainerCallback):
 
         self.mod_grads = {}
         self.batch_indices: Tensor | None = None
+
+        # TODO: Handle this more elegantly
+        self.torch_dtype = torch.float32 if self.dtype == np.float32 else torch.float16
 
     def write_grads(self, grad_buffer: np.memmap):
         # Ensure the nonblocking copies are all finished
@@ -88,7 +103,7 @@ class GradientCollectorCallback(TrainerCallback):
 
         if isinstance(model, PeftModel):
             reshape_to_square = True
-            target_modules = detect_peft_modules(model)
+            target_modules = detect_peft_modules(model)  # type: ignore
         else:
             reshape_to_square = False
             target_modules = None
@@ -100,8 +115,10 @@ class GradientCollectorCallback(TrainerCallback):
                 {},
                 projection_dim=self.projection_dim or None,
                 reshape_to_square=reshape_to_square,
+                include_bias=self.include_bias,
             ),
             target_modules=target_modules,
+            attention_cfgs=self.attention_cfgs,
         )
         self.grad_sizes = {
             name: math.prod(s) for name, s in self.collector.shapes().items()
@@ -190,13 +207,13 @@ class GradientCollectorCallback(TrainerCallback):
         return args, kwargs
 
     def on_module_backward(self, name: str, g: Tensor):
-        lo = torch.finfo(torch.float16).min
-        hi = torch.finfo(torch.float16).max
+        lo = torch.finfo(self.torch_dtype).min
+        hi = torch.finfo(self.torch_dtype).max
         g = g.flatten(1).clamp_(lo, hi)
 
         # Asynchronously move the gradient to CPU and convert to fp16
         self.mod_grads[name] = g.to(
-            device="cpu", dtype=torch.float16, non_blocking=True
+            device="cpu", dtype=self.torch_dtype, non_blocking=True
         )
 
     def on_substep_end(
@@ -221,6 +238,25 @@ class GradientCollectorCallback(TrainerCallback):
         **kwargs,
     ):
         self.on_substep_end(args, state, control)
+
+        # Record training order if enabled
+        if self.order is not None:
+            assert (
+                self.batch_indices is not None
+            ), "Batch indices are not available for training order tracking"
+
+            epoch = int(state.epoch or 0)
+            global_step = state.global_step
+
+            self.order.extend(
+                {
+                    "_idx": int(idx),
+                    # global_step is 1-indexed.
+                    "global_step": global_step,
+                    "epoch": epoch,
+                }
+                for idx in self.batch_indices.tolist()
+            )
 
         # We can skip all this if we're not using the optimizer state
         if not self.use_optimizer_state:
@@ -279,12 +315,39 @@ class GradientCollectorCallback(TrainerCallback):
         self.collector.__exit__(None, None, None)
         self.fwd_handle.remove()
 
+        if self.order is not None:
+            self._save_order()
+
+    def _save_order(self):
+        """Save the training order to disk, handling distributed training."""
+        assert self.order is not None
+        os.makedirs(self.path, exist_ok=True)
+
+        if dist.is_initialized():
+            # Gather training order from all processes
+            all_orders = [None] * dist.get_world_size()
+            dist.all_gather_object(all_orders, self.order)
+
+            # Only rank 0 saves the merged data
+            if dist.get_rank() == 0:
+                merged_order = list(
+                    chain.from_iterable(
+                        order for order in all_orders if order is not None
+                    )
+                )
+                dataset = Dataset.from_list(merged_order)
+                dataset.save_to_disk(os.path.join(self.path, "order.hf"))
+
+        else:
+            dataset = Dataset.from_list(self.order)
+            dataset.save_to_disk(os.path.join(self.path, "order.hf"))
+
 
 def prepare_for_gradient_collection(trainer: Trainer):
     """Mutate the trainer and its datasets in-place to expose the datasets'
     indices to the gradient collector callback."""
     # Add indices to the training dataset
-    trainer.train_dataset = trainer.train_dataset.map(
+    trainer.train_dataset = trainer.train_dataset.map(  # type: ignore
         lambda ex, idx: {"_idx": idx}, with_indices=True
     )
 
@@ -292,16 +355,16 @@ def prepare_for_gradient_collection(trainer: Trainer):
     if trainer.eval_dataset is not None:
         if isinstance(trainer.eval_dataset, dict):
             for eval_name, dataset in trainer.eval_dataset.items():
-                trainer.eval_dataset[eval_name] = dataset.map(
+                trainer.eval_dataset[eval_name] = dataset.map(  # type: ignore
                     lambda ex, idx: {"_idx": idx}, with_indices=True
                 )
         else:
-            trainer.eval_dataset = trainer.eval_dataset.map(
+            trainer.eval_dataset = trainer.eval_dataset.map(  # type: ignore
                 lambda ex, idx: {"_idx": idx}, with_indices=True
             )
 
     trainer._set_signature_columns_if_needed()
-    trainer._signature_columns.append("_idx")
+    trainer._signature_columns.append("_idx")  # type: ignore
 
     if trainer.data_collator:
         original_collator = trainer.data_collator

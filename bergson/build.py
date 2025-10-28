@@ -20,13 +20,18 @@ from transformers import (
 )
 
 from .collection import collect_gradients
-from .data import IndexConfig, allocate_batches, load_data_string, tokenize
+from .data import DataConfig, IndexConfig, allocate_batches, load_data_string, tokenize
 from .gradients import GradientProcessor
 from .peft import detect_peft_modules
 from .utils import assert_type, get_layer_list
 
 
-def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset | IterableDataset):
+def worker(
+    rank: int,
+    world_size: int,
+    cfg: IndexConfig,
+    ds: Dataset | IterableDataset,
+):
     torch.cuda.set_device(rank)
 
     # These should be set by the main process
@@ -136,9 +141,17 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset | IterableD
             projection_dim=cfg.projection_dim or None,
             reshape_to_square=cfg.reshape_to_square,
             projection_type=cfg.projection_type,
+            include_bias=cfg.include_bias,
         )
-        if rank == 0:
-            processor.save(cfg.run_path)
+        if rank == 0 and cfg.save_processor:
+            processor.save(cfg.partial_run_path)
+
+    if cfg.split_attention_modules:
+        attention_cfgs = {
+            module: cfg.attention for module in cfg.split_attention_modules
+        }
+    else:
+        attention_cfgs = {}
 
     if isinstance(ds, Dataset):
         batches = allocate_batches(ds["length"][:], cfg.token_batch_size)
@@ -146,42 +159,54 @@ def worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset | IterableD
             model,
             ds,
             processor,
-            cfg.run_path,
+            cfg.partial_run_path,
             batches=batches,
             kl_divergence=cfg.loss_fn == "kl",
             loss_reduction=cfg.loss_reduction,
             skip_preconditioners=cfg.skip_preconditioners,
             target_modules=target_modules,
+            attention_cfgs=attention_cfgs,
+            save_index=cfg.save_index,
+            save_processor=cfg.save_processor,
+            drop_columns=cfg.drop_columns,
         )
     else:
-        # Convert each chunk to Dataset then collect their gradients
-        buf, chunk_id = [], 0
+        # Convert each shard to a Dataset then map over its gradients
+        buf, shard_id = [], 0
 
         def flush():
-            nonlocal buf, chunk_id
+            nonlocal buf, shard_id
             if not buf:
                 return
-            sub_ds = assert_type(Dataset, Dataset.from_list(buf))
-            batches = allocate_batches(sub_ds["length"], cfg.token_batch_size)
+            ds_shard = assert_type(Dataset, Dataset.from_list(buf))
+            batches = allocate_batches(ds_shard["length"][:], cfg.token_batch_size)
             collect_gradients(
                 model,
-                sub_ds,
+                ds_shard,
                 processor,
-                os.path.join(cfg.run_path, f"chunk-{chunk_id:05d}"),
+                os.path.join(cfg.partial_run_path, f"shard-{shard_id:05d}"),
                 batches=batches,
                 kl_divergence=cfg.loss_fn == "kl",
                 loss_reduction=cfg.loss_reduction,
                 skip_preconditioners=cfg.skip_preconditioners,
                 target_modules=target_modules,
+                attention_cfgs=attention_cfgs,
+                save_index=cfg.save_index,
+                # Save a processor state checkpoint after each shard
+                save_processor=cfg.save_processor,
+                drop_columns=cfg.drop_columns,
             )
             buf.clear()
-            chunk_id += 1
+            shard_id += 1
 
         for ex in tqdm(ds, desc="Collecting gradients"):
             buf.append(ex)
-            if len(buf) == cfg.streaming_chunk_size:
+            if len(buf) == cfg.stream_shard_size:
                 flush()
         flush()
+
+        if cfg.save_processor:
+            processor.save(cfg.partial_run_path)
 
 
 def dist_worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
@@ -191,15 +216,13 @@ def dist_worker(rank: int, world_size: int, cfg: IndexConfig, ds: Dataset):
         dist.destroy_process_group()
 
 
-def estimate_advantage(ds: Dataset, cfg: IndexConfig):
+def estimate_advantage(ds: Dataset, cfg: DataConfig):
     """Group rollouts by prompt and estimate advantages."""
-    assert isinstance(ds, Dataset), "Dataset required for advantage estimation"
-
-    df = ds.select_columns([cfg.data.prompt_column, cfg.data.reward_column]).to_pandas()
+    df = ds.select_columns([cfg.prompt_column, cfg.reward_column]).to_pandas()
     df = assert_type(pd.DataFrame, df)
 
-    advantages = df[cfg.data.reward_column] - df.groupby(cfg.data.prompt_column)[
-        cfg.data.reward_column
+    advantages = df[cfg.reward_column] - df.groupby(cfg.prompt_column)[
+        cfg.reward_column
     ].transform("mean")
 
     return advantages.tolist()
@@ -222,9 +245,10 @@ def build_gradient_dataset(cfg: IndexConfig):
         remove_columns=remove_columns,
     )
     if cfg.data.reward_column:
+        assert isinstance(ds, Dataset), "Dataset required for advantage estimation"
         ds = ds.add_column(
             "advantage",
-            estimate_advantage(ds, cfg),
+            estimate_advantage(ds, cfg.data),
             new_fingerprint="advantage",  # type: ignore
         )
 
@@ -257,3 +281,8 @@ def build_gradient_dataset(cfg: IndexConfig):
             logs_specs=DefaultLogsSpecs(),
         )
         ctx.wait()
+
+    try:
+        os.rename(cfg.partial_run_path, cfg.run_path)
+    except Exception:
+        pass

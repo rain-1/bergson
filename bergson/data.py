@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
@@ -51,11 +52,70 @@ class DataConfig:
 
 
 @dataclass
+class AttentionConfig:
+    """Config for splitting an attention module into head matrices."""
+
+    num_heads: int = 0
+    """Number of attention heads."""
+
+    head_size: int = 0
+    """Size of each attention head."""
+
+    head_dim: int = 0
+    """Axis index for `num_heads` in the weight matrix."""
+
+
+@dataclass
+class QueryConfig:
+    """Config for querying an index on the fly."""
+
+    query_path: str = ""
+    """Path to the query dataset."""
+
+    query_method: Literal["mean", "nearest"] = "mean"
+    """Method to use for computing the query."""
+
+    save_processor: bool = True
+    """Whether to write the query dataset gradient processor
+    to disk."""
+
+    query_preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner. The precomputed
+    preconditioner is applied to the query dataset gradients."""
+
+    index_preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner. The precomputed
+    preconditioner is applied to the query dataset gradients.
+    This does not affect the ability to compute a new
+    preconditioner during gradient collection."""
+
+    mixing_coefficient: float = 0.5
+    """Coefficient to weight the application of the query preconditioner
+    and the pre-computed index preconditioner. 0.0 means only use the
+    query preconditioner and 1.0 means only use the index preconditioner."""
+
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
+
+    unit_normalize: bool = False
+    """Whether to unit normalize the gradients before computing the scores."""
+
+    batch_size: int = 1024
+    """Batch size for processing the query dataset."""
+
+
+@dataclass
 class IndexConfig:
     """Config for building the index and running the model/dataset pipeline."""
 
     run_path: str = field(positional=True)
-    """Name of the run. Used to create a directory for the index."""
+    """Name of the run. Used to create a directory for run artifacts."""
+
+    save_index: bool = True
+    """Whether to write the gradient index to disk."""
+
+    save_processor: bool = True
+    """Whether to write the gradient processor to disk."""
 
     data: DataConfig = field(default_factory=DataConfig)
     """Specification of the data on which to build the index."""
@@ -67,10 +127,13 @@ class IndexConfig:
     """Whether to use Fully Sharded Data Parallel (FSDP) for collecing gradients."""
 
     precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "auto"
-    """Precision to use for the model parameters."""
+    """Precision (dtype) to use for the model parameters."""
 
     projection_dim: int = 16
     """Dimension of the random projection for the index, or 0 to disable it."""
+
+    include_bias: bool = False
+    """Whether to append bias gradients for modules that have them."""
 
     reshape_to_square: bool = False
     """Whether to reshape the gradients to a square matrix."""
@@ -90,7 +153,7 @@ class IndexConfig:
     stats_sample_size: int | None = 10_000
     """Number of examples to use for estimating processor statistics."""
 
-    drop_columns: bool = False
+    drop_columns: bool = True
     """Only return the new dataset columns."""
 
     loss_fn: Literal["ce", "kl"] = "ce"
@@ -102,11 +165,23 @@ class IndexConfig:
     streaming: bool = False
     """Whether to use streaming mode for the dataset."""
 
-    streaming_chunk_size: int = 100_000
-    """Chunk size for streaming the dataset into Dataset objects."""
+    stream_shard_size: int = 400_000
+    """Shard size for streaming the dataset into Dataset objects."""
 
     revision: str | None = None
     """Revision of the model."""
+
+    split_attention_modules: list[str] = field(default_factory=list)
+    """Modules to split into head matrices."""
+
+    attention: AttentionConfig = field(default_factory=AttentionConfig)
+    """Configuration for each attention module to be split into head matrices.
+    Used for attention modules specified in `split_attention_modules`."""
+
+    @property
+    def partial_run_path(self) -> str:
+        """Temporary path used while writing build artifacts."""
+        return f"{self.run_path}.part"
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -114,7 +189,7 @@ def ceildiv(a: int, b: int) -> int:
     return -(-a // b)  # Equivalent to math.ceil(a / b) but faster for integers
 
 
-def allocate_batches(doc_lengths: list[int], N: int) -> list[list[int]]:
+def allocate_batches(doc_lengths: list[int], N: int, seed: int = 42) -> list[list[int]]:
     """
     Allocate documents into batches that are then distributed evenly across
     a fixed number of workers.
@@ -230,8 +305,13 @@ def allocate_batches(doc_lengths: list[int], N: int) -> list[list[int]]:
     for b_idx, batch in enumerate(batches):
         allocation[b_idx % world_size].append(batch)
 
-    # sanity: equal # of batches per worker
+    # Sanity: equal # of batches per worker
     assert len({len(b) for b in allocation}) == 1
+
+    # Break any systematic ordering of batches
+    random.seed(seed)
+    random.shuffle(allocation[rank])
+
     return allocation[rank]
 
 
@@ -305,31 +385,11 @@ def load_data_string(
     return ds
 
 
-def load_unstructured_gradients(root_dir: str) -> np.memmap:
-    """Map the gradients stored in `root_dir` into memory."""
-    with open(os.path.join(root_dir, "info.json")) as f:
-        info = json.load(f)
-        grad_size = info["grad_size"]
-        num_grads = info["num_grads"]
-
-    mmap = np.memmap(
-        root_dir + "/gradients.bin",
-        dtype=np.float16,
-        mode="r",
-        shape=(num_grads, grad_size),
-    )
-    return mmap
-
-
 def load_gradients(root_dir: str) -> np.memmap:
     """Map the structured gradients stored in `root_dir` into memory."""
 
     with open(os.path.join(root_dir, "info.json")) as f:
         info = json.load(f)
-
-    # TODO 2025-08-01 Remove legacy loading
-    if "grad_size" in info:
-        return load_unstructured_gradients(root_dir)
 
     dtype = info["dtype"]
     num_grads = info["num_grads"]
@@ -342,8 +402,9 @@ def load_gradients(root_dir: str) -> np.memmap:
     )
 
 
-# TODO 2025-08-01 Set default concatenate_gradients = False
-def load_gradient_dataset(root_dir: str, concatenate_gradients: bool = True) -> Dataset:
+def load_gradient_dataset(
+    root_dir: str, concatenate_gradients: bool = False
+) -> Dataset:
     """Load a dataset of gradients from `root_dir`."""
 
     def load_shard(dir: str) -> Dataset:
