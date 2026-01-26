@@ -303,6 +303,24 @@ class ReduceConfig:
 
 
 @dataclass
+class HessianConfig:
+    """Config for reducing the gradients."""
+
+    method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
+    """Method for approximating the Hessian."""
+
+    ev_correction: bool = False
+    """Whether to additionally compute eigenvalue correction."""
+
+    hessian_dtype: Literal["auto", "bf16", "fp16", "fp32"] = "auto"
+    """Precision (dtype) to use for the Hessian approximation."""
+
+    use_dataset_labels: bool = False
+    """Whether to use dataset labels for Hessian (empirical Fisher) approximation.
+    If false, the model predictions will be used."""
+
+
+@dataclass
 class FaissConfig:
     """Configuration for FAISS index."""
 

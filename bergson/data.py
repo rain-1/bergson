@@ -76,6 +76,23 @@ def allocate_batches(
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
+    (batches,) = _allocate_batches_world(doc_lengths, N, world_size, seed, ranks=[rank])
+    return batches
+
+
+def _allocate_batches_world(
+    doc_lengths: list[int],
+    N: int,
+    world_size: int,
+    seed: int = 42,
+    ranks: list[int] | None = None,
+) -> list[list[list[int]]]:
+    """Lower-level version of allocate_batches that returns batches for specified ranks.
+
+    If ranks is None, returns batches for all ranks.
+    """
+    if ranks is None:
+        ranks = list(range(world_size))
     if len(doc_lengths) < world_size:
         raise RuntimeError("Not enough documents to distribute across workers.")
 
@@ -162,11 +179,12 @@ def allocate_batches(
     # Sanity: equal # of batches per worker
     assert len({len(b) for b in allocation}) == 1
 
-    # Break any systematic ordering of batches
-    random.seed(seed)
-    random.shuffle(allocation[rank])
+    # Break any systematic ordering of batches (shuffle only requested ranks)
+    for rank in ranks:
+        random.seed(seed)
+        random.shuffle(allocation[rank])
 
-    return allocation[rank]
+    return [allocation[rank] for rank in ranks]
 
 
 def create_index(
@@ -466,7 +484,7 @@ def pad_and_tensor(
     padding_value: int = 0,
     dtype: torch.dtype | None = torch.long,
     device: torch.device | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Pad a list of sequences to the same length and convert them to tensors.
     Returns a tuple of padded sequences and labels. The labels are the same as the
@@ -485,7 +503,12 @@ def pad_and_tensor(
     # convert to tensor
     padded_tokens = torch.tensor(padded, dtype=dtype, device=device)
     padded_labels = torch.tensor(labels, dtype=dtype, device=device)
-    return padded_tokens, padded_labels
+    # Compute valid_masks: position i is valid if labels[i+1] != -100
+    N, S = padded_tokens.shape
+    valid_masks = torch.zeros(N, S, dtype=torch.bool, device=device)
+    valid_masks[:, :-1] = padded_labels[:, 1:] != -100
+
+    return padded_tokens, padded_labels, valid_masks
 
 
 def tokenize(batch: dict, *, args: DataConfig, tokenizer):
