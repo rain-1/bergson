@@ -597,6 +597,7 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
                 logits.reshape(-1, logits.size(-1)),
                 y[:, 1:].flatten(),
                 reduction="none",
+                label_smoothing=cfg.label_smoothing,
             ).reshape_as(y[:, 1:])
             losses = losses.sum(1) / denoms
             if "advantage" in batch:

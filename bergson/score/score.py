@@ -18,6 +18,7 @@ from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
 from bergson.score.score_writer import MemmapScoreWriter
 from bergson.score.scorer import Scorer
+from bergson.utils.math import compute_damped_inverse
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -177,16 +178,10 @@ def precondition_ds(
         )
 
         # Compute H^(-1) via eigendecomposition and apply to query gradients
-        h_inv = {}
-        for name, H in mixed_preconditioner.items():
-            H = H.to(device=device, dtype=torch.float64)
-            damping_val = 0.1 * H.abs().mean()
-            H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-
-            eigval, eigvec = torch.linalg.eigh(H)
-            h_inv[name] = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                mixed_preconditioner[name].dtype
-            )
+        h_inv = {
+            name: compute_damped_inverse(H.to(device=device))
+            for name, H in mixed_preconditioner.items()
+        }
 
         def precondition(batch):
             for name in target_modules:
