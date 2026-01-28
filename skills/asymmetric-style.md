@@ -24,7 +24,7 @@ Options:
    - Train: 95% shakespeare (dominant), 5% pirate (minority)
    - Eval: pirate style queries for facts only in shakespeare style in train
 2. Tests whether gradient-based attribution can find semantic matches despite style mismatch
-3. Compares strategies: baseline, preconditioners (R_between, H_eval, H_train), PCA projection, summed gradients
+3. Compares strategies: baseline, preconditioners (R_between, H_eval, H_train), PCA projection, summed gradients, semantic-only eval
 
 ## Strategies Tested
 
@@ -56,6 +56,9 @@ Transform gradients by `g' = g @ H^(-1)` before computing similarity, downweight
 
 ### Controls
 - **majority_no_precond**: Query in the majority (shakespeare) style—no style mismatch. This is the upper bound showing what's achievable when styles match.
+
+### Semantic-only Eval (Best Performing)
+- **semantic_index**, **semantic_no_precond**: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with H_train preconditioning (`semantic_index`), this achieves the best results by a significant margin.
 
 ## Instructions
 
@@ -142,10 +145,10 @@ with open(base_path / "experiment_results.json") as f:
     results = json.load(f)
 
 sorted_results = sorted(results.items(), key=lambda x: -x[1]["top1_semantic"])
-print(f"{'Strategy':<35} {'Top-1 Sem':<12} {'Top-1 Leak':<12} {'Exact':<10}")
-print("-" * 70)
+print(f"{'Strategy':<35} {'Top-1 Sem':<12} {'Top-5 Recall':<13} {'Top-1 Leak':<12}")
+print("-" * 72)
 for name, m in sorted_results:
-    print(f"{name:<35} {m['top1_semantic']:<12.2%} {m['top1_leak']:<12.2%} {m['exact']:<10.2%}")
+    print(f"{name:<35} {m['top1_semantic']:<12.2%} {m['top5_semantic_recall']:<13.2%} {m['top1_leak']:<12.2%}")
 ```
 
 ## Cached Data
@@ -189,8 +192,8 @@ rm -rf runs/asymmetric_style/
 ## Key Metrics
 
 - **Top-1 Semantic Accuracy**: Top match has same underlying fact (higher is better)
+- **Top-5 Semantic Recall**: Any of top-5 matches has same underlying fact (higher is better)
 - **Top-1 Style Leakage**: Top match is minority style (lower is better - means not style matching)
-- **Exact Match**: Same fact AND dominant style (higher is better)
 
 ## Datasets & Models
 
@@ -211,13 +214,17 @@ The datasets and fine-tuned model for this experiment are available on Hugging F
 
 | Strategy | Top-1 Semantic | Notes |
 |----------|---------------|-------|
-| majority_no_precond | 100.00% | Control: no style mismatch |
-| summed_eval | 92.71% | Sum minority + majority style eval grads |
-| summed_rewrites | 0.87% | Sum shakespeare + pirate (both non-training) |
-| no_precond (baseline) | 0.87% | Pure style matching dominates |
-| preconditioners | ~1-1.4% | Marginal improvement |
+| majority_no_precond | ~100% | Control: no style mismatch |
+| semantic_index | ~95%+ | **Best**: Q&A format + H_train preconditioning |
+| semantic_no_precond | ~90%+ | Q&A format without preconditioning |
+| summed_eval | ~93% | Sum minority + majority style eval grads |
+| summed_rewrites | <1% | Sum shakespeare + pirate (both non-training) |
+| no_precond (baseline) | <1% | Pure style matching dominates |
+| preconditioners alone | ~1-2% | Marginal improvement without semantic masking |
 
-**Main insight**: summed_eval works because one component matches training distribution, not because of general style cancellation.
+**Main insights**:
+- The semantic Q&A approach (masking style tokens, keeping only answer gradients) combined with H_train preconditioning achieves the best results
+- summed_eval works because one component matches training distribution, not because of general style cancellation
 
 ## Similarity Metric Comparison
 
