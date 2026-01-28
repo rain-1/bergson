@@ -11,7 +11,7 @@ This simulates a scenario where the signal you're looking for is confounded: for
 ### Requirements
 
 **Using pre-computed HuggingFace data (recommended)**:
-- GPU with ~16GB VRAM for the analysis model (Qwen3-8B with LoRA)
+- GPU with ~24GB VRAM for the analysis model (Qwen3-8B with LoRA)
 - The experiment downloads data from [EleutherAI/bergson-asymmetric-style](https://huggingface.co/datasets/EleutherAI/bergson-asymmetric-style) and uses [EleutherAI/bergson-asymmetric-style-qwen3-8b-lora](https://huggingface.co/EleutherAI/bergson-asymmetric-style-qwen3-8b-lora) for gradient collection
 
 **Generating data locally**:
@@ -20,7 +20,7 @@ This simulates a scenario where the signal you're looking for is confounded: for
 
 ### Dataset Structure
 
-The experiment creates train/eval splits with disjoint fact-style combinations:
+The experiment creates train/eval splits with disjoint fact-style combinations:r
 
 - **Training set**: Each fact appears in exactly one style (95% shakespeare, 5% pirate)
 - **Eval set**: Queries use the *opposite* style from training—facts that were trained in shakespeare are queried in pirate
