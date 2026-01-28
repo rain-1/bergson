@@ -58,6 +58,59 @@ runs/asymmetric_style/
 - **Top-5 Semantic Recall**: Any of top-5 matches has same underlying fact (higher is better)
 - **Top-1 Style Leakage**: Top match is minority style (lower is better). Due to the disjoint partitioning, high leakage implies low semantic accuracy and vice versa.
 
+### Strategies
+
+The experiment compares multiple strategies for suppressing style and recovering semantic matching.
+
+#### Baseline
+
+- **no_precond**: Bare gradient cosine similarity. Expected to fail because style dominates.
+
+#### Controls (alternative eval sets)
+
+- **majority_no_precond**: Query in shakespeare style (the majority/dominant style). No style mismatch, so this is the upper bound—style and semantic matches align.
+- **original_style_no_precond**: Eval set uses original (unstyled) facts instead of pirate style.
+- **summed_majority_minority**: Eval gradients are the sum of pirate and shakespeare style gradients for each fact. Hypothesis: style-specific components cancel out.
+
+#### Preconditioners
+
+Without preconditioning, similarity is computed as cosine similarity of gradients:
+
+```python
+score(q, t) = cos(g_q, g_t)
+           = (g_q · g_t) / (||g_q|| ||g_t||)
+```
+
+where `g_q` is the eval gradient and `g_t` is a training gradient (row vectors).
+
+With a preconditioner matrix `H`, we transform the eval gradient before computing similarity:
+
+```python
+H_inv = (H + λI)^(-1)           # damped inverse
+g_eval_precond = g_eval @ H_inv
+g_eval_norm = g_eval_precond / ||g_eval_precond||
+g_train_norm = g_train / ||g_train||
+score(q, t) = g_eval_norm · g_train_norm
+```
+
+The unnormalized inner product `g_eval @ H^(-1) @ g_train.T` is the classic influence function formula. Preconditioning downweights directions where `H` has large eigenvalues.
+
+- **index**: `H = G_train.T @ G_train` (training set second moment). This is the classic [influence function](https://arxiv.org/abs/1703.04730) formulation: a second-order Taylor approximation shows that the change in loss from upweighting a training point is proportional to `g_eval @ H^(-1) @ g_train.T`. Intuitively, H^(-1) gives each training point less credit for similarity in "common" directions (where many training points contribute) and more credit in rare/specific directions.
+
+- **eval_second_moment**: `H = G_eval.T @ G_eval`. Since training gradients average to ~0 at convergence, directions where eval gradients deviate from zero will dominate `H_eval`. Preconditioning downweights these directions. If style causes systematic deviation in eval gradients (e.g., pirate queries all shift in a similar direction), this suppresses the style signal.
+
+- **train_eval_mixed**: `H = α * H_train + (1-α) * H_eval`. Combines intuitions from both.
+
+- **r_between**: `H = (μ_pirate - μ_shakespeare)(μ_pirate - μ_shakespeare)^T + λI` (computed on train set). A rank-1 matrix capturing the "style direction" directly. Preconditioning projects out this direction.
+
+#### Dimensionality Reduction
+
+- **pca_k{n}_index**: Compute PCA on the matrix of paired pirate/shakespeare style differences (differences between matched facts, train set only). Project gradients onto the orthogonal complement of the top-n principal components, then precondition with the train set second moment matrix. This removes the dominant style directions while preserving semantic signal.
+
+#### Semantic-only Eval
+
+- **semantic_index**, **semantic_no_precond**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with preconditioning (`semantic_index`), this method achieves the best results by a significant margin.
+
 ### Running the Experiment
 
 **With an AI agent**: Point Claude Code or another AI agent at `skills/asymmetric-style.md` for detailed instructions and options (`--recompute`, `--sweep-pca`, `--rewrite-ablation`, `--summary`).
