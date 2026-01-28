@@ -1,5 +1,7 @@
 """Main experiment orchestration for semantic experiments."""
 
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
+
 import subprocess
 from pathlib import Path
 

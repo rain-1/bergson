@@ -1,6 +1,9 @@
 """Dataset creation and rewording utilities for semantic experiments."""
 
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
+
 from pathlib import Path
+from typing import Any, cast
 
 import torch
 from datasets import (
@@ -46,11 +49,13 @@ def load_experiment_data(
         data = load_experiment_data(hf_repo="...", splits=["train", "eval"])
     """
     if hf_repo:
-        dataset_dict = load_dataset(hf_repo)
+        loaded = load_dataset(hf_repo)
+        if not isinstance(loaded, DatasetDict):
+            raise TypeError(f"Expected DatasetDict from HF, got {type(loaded)}")
+        dataset_dict: DatasetDict = loaded
         if splits:
-            dataset_dict = DatasetDict(
-                {k: dataset_dict[k] for k in splits if k in dataset_dict}
-            )
+            filtered = {k: dataset_dict[k] for k in splits if k in dataset_dict}
+            dataset_dict = DatasetDict(cast(Any, filtered))
         return dataset_dict
 
     if base_path is None:
@@ -71,12 +76,13 @@ def load_experiment_data(
     if not available_splits:
         raise FileNotFoundError(f"No .hf datasets found in {data_path}")
 
-    return DatasetDict(
-        {
-            split: load_from_disk(str(data_path / f"{split}.hf"))
-            for split in available_splits
-        }
-    )
+    result: dict[str, Dataset] = {}
+    for split in available_splits:
+        ds = load_from_disk(str(data_path / f"{split}.hf"))
+        if isinstance(ds, DatasetDict):
+            ds = ds["train"]
+        result[split] = ds
+    return DatasetDict(cast(Any, result))
 
 
 def reword(

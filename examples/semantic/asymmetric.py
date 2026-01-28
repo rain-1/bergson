@@ -4,6 +4,9 @@ This module creates datasets where semantic matches are only available in the do
 style, forcing attribution to choose between style similarity and semantic similarity.
 """
 
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
+# pyright: reportAttributeAccessIssue=false
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,7 +84,13 @@ def create_asymmetric_dataset(
     # Return cached if exists
     if train_path.exists() and eval_path.exists():
         print(f"Loading cached datasets from {output_dir}")
-        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))
+        train_cached = load_from_disk(str(train_path))
+        eval_cached = load_from_disk(str(eval_path))
+        if isinstance(train_cached, DatasetDict):
+            train_cached = train_cached["train"]
+        if isinstance(eval_cached, DatasetDict):
+            eval_cached = eval_cached["train"]
+        return train_cached, eval_cached
 
     # Load original facts to get metadata columns
     original = load_from_disk("data/facts_dataset.hf")

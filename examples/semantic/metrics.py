@@ -1,5 +1,7 @@
 """Similarity metrics computation for semantic experiments."""
 
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
+
 import json
 from pathlib import Path
 from typing import Any

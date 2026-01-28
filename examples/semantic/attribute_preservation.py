@@ -15,6 +15,9 @@ Design:
 - Style suppression should preserve attribute matching
 """
 
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
+# pyright: reportReturnType=false
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1769,6 +1772,12 @@ def run_attribute_preservation_experiment(
         print(f"  Occupation Accuracy: {majority.top1_occupation_accuracy:.2%}")
 
     if baseline and r_between:
+        style_reduction = (
+            baseline.top1_style_only_match - r_between.top1_style_only_match
+        )
+        occ_change = (
+            r_between.top1_occupation_accuracy - baseline.top1_occupation_accuracy
+        )
         if style_reduction > 0 and occ_change >= -0.05:
             print(
                 "\n✓ SUCCESS: Style suppression works without damaging attribute preservation!"
