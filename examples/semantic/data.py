@@ -1,6 +1,5 @@
 """Dataset creation and rewording utilities for semantic experiments."""
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
 
 from pathlib import Path
 from typing import Any, cast
@@ -125,7 +124,7 @@ def reword(
     for i in tqdm(range(0, len(data_list), batch_size)):
         # 1. Prepare the batch
         batch_items = data_list[i : i + batch_size]
-        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]
+        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]  # type: ignore[index]
 
         # 2. Tokenize (Batch mode)
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
@@ -154,7 +153,7 @@ def reword(
 
         # 6. Store results
         for item, output_text in zip(batch_items, decoded_batch):
-            new_facts.append(item["fact"])
+            new_facts.append(item["fact"])  # type: ignore[index]
             new_reworded.append(output_text.strip())
 
     # Reconstruct dataset
@@ -233,8 +232,8 @@ def create_qwen_only_dataset() -> Path:
         # Add back any dropped columns from original
         for col in original.column_names:
             if col not in ds.column_names:
-                orig_map = {row["fact"]: row for row in original}
-                restored_col = [orig_map[row["fact"]][col] for row in ds]
+                orig_map = {row["fact"]: row for row in original}  # type: ignore[index]
+                restored_col = [orig_map[row["fact"]][col] for row in ds]  # type: ignore[index]
                 ds = ds.add_column(col, restored_col)
 
         merged_datasets.append(ds)

@@ -4,9 +4,6 @@ This module creates datasets where semantic matches are only available in the do
 style, forcing attribution to choose between style similarity and semantic similarity.
 """
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
-# pyright: reportAttributeAccessIssue=false
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,7 +93,7 @@ def create_asymmetric_dataset(
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     # Load style-specific datasets (Qwen only for consistency)
     style_datasets = {
@@ -107,14 +104,14 @@ def create_asymmetric_dataset(
     }
     for name in style_datasets:
         if isinstance(style_datasets[name], DatasetDict):
-            style_datasets[name] = style_datasets[name]["train"]
+            style_datasets[name] = style_datasets[name]["train"]  # type: ignore[index]
 
         # Add back metadata columns from original
         ds = style_datasets[name]
         for col in original.column_names:
             if col not in ds.column_names:
-                restored_col = [fact_to_meta[row["fact"]][col] for row in ds]
-                ds = ds.add_column(col, restored_col)
+                restored_col = [fact_to_meta[row["fact"]][col] for row in ds]  # type: ignore[index]
+                ds = ds.add_column(col, restored_col)  # type: ignore[union-attr]
         style_datasets[name] = ds
 
     dominant_ds = style_datasets[config.dominant_style]
@@ -122,7 +119,7 @@ def create_asymmetric_dataset(
 
     # Get unique (identifier, field) pairs - these represent underlying semantic facts
     # Each pair has multiple templates (different surface forms of the same fact)
-    semantic_facts = list({(row["identifier"], row["field"]) for row in original})
+    semantic_facts = list({(row["identifier"], row["field"]) for row in original})  # type: ignore[index]
     n_semantic_facts = len(semantic_facts)
 
     # Split into exclusive (dominant-only) and shared by semantic fact
@@ -143,18 +140,18 @@ def create_asymmetric_dataset(
     train_dominant_indices = [
         i
         for i, row in enumerate(dominant_ds)
-        if row["template"] < config.train_template_cutoff
+        if row["template"] < config.train_template_cutoff  # type: ignore[index]
     ]
-    train_dominant = dominant_ds.select(train_dominant_indices)
+    train_dominant = dominant_ds.select(train_dominant_indices)  # type: ignore[union-attr]
 
     # 2. Minority style only for shared facts (any template since minority eval is different)
     minority_shared_indices = [
         i
         for i, row in enumerate(minority_ds)
-        if (row["identifier"], row["field"]) in shared_semantic_facts
-        and row["template"] < config.train_template_cutoff
+        if (row["identifier"], row["field"]) in shared_semantic_facts  # type: ignore[index]
+        and row["template"] < config.train_template_cutoff  # type: ignore[index]
     ]
-    train_minority = minority_ds.select(minority_shared_indices)
+    train_minority = minority_ds.select(minority_shared_indices)  # type: ignore[union-attr]
 
     # Add style column
     train_dominant = train_dominant.add_column(
@@ -181,10 +178,10 @@ def create_asymmetric_dataset(
     eval_minority_indices = [
         i
         for i, row in enumerate(minority_ds)
-        if (row["identifier"], row["field"]) in exclusive_semantic_facts
-        and row["template"] >= config.train_template_cutoff
+        if (row["identifier"], row["field"]) in exclusive_semantic_facts  # type: ignore[index]
+        and row["template"] >= config.train_template_cutoff  # type: ignore[index]
     ]
-    eval_ds = minority_ds.select(eval_minority_indices)
+    eval_ds = minority_ds.select(eval_minority_indices)  # type: ignore[union-attr]
     eval_ds = eval_ds.add_column("style", [config.minority_style] * len(eval_ds))
 
     # Add expected_match_style to indicate where the ground truth is
@@ -554,12 +551,12 @@ def compute_asymmetric_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -691,7 +688,7 @@ def compute_style_preconditioner(
     if isinstance(train_ds, DatasetDict):
         train_ds = train_ds["train"]
 
-    train_styles = train_ds["style"]
+    train_styles = train_ds["style"]  # type: ignore[index]
     train_grads = load_gradients(index_path, structured=True)
 
     with open(index_path / "info.json") as f:
@@ -1003,12 +1000,12 @@ def compute_asymmetric_metrics_with_pca(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k_results = 10
@@ -1119,8 +1116,8 @@ def create_majority_style_eval(
         if isinstance(majority_eval_ds, DatasetDict):
             majority_eval_ds = majority_eval_ds["train"]
 
-        train_reworded = set(train_ds["reworded"])
-        eval_reworded = set(majority_eval_ds["reworded"])
+        train_reworded = set(train_ds["reworded"])  # type: ignore[index]
+        eval_reworded = set(majority_eval_ds["reworded"])  # type: ignore[index]
         overlap = train_reworded & eval_reworded
         has_leakage = len(overlap) > 0
 
@@ -1151,7 +1148,7 @@ def create_majority_style_eval(
         eval_ds = eval_ds["train"]
 
     # Get semantic facts from eval (identifier, field pairs)
-    eval_semantic_facts = {(row["identifier"], row["field"]) for row in eval_ds}
+    eval_semantic_facts = {(row["identifier"], row["field"]) for row in eval_ds}  # type: ignore[index]
 
     # Load dominant style dataset
     dominant_ds = load_from_disk(str(local_styled_path))
@@ -1162,11 +1159,11 @@ def create_majority_style_eval(
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     for col in original.column_names:
         if col not in dominant_ds.column_names:
-            restored_col = [fact_to_meta[row["fact"]][col] for row in dominant_ds]
+            restored_col = [fact_to_meta[row["fact"]][col] for row in dominant_ds]  # type: ignore[index]
             dominant_ds = dominant_ds.add_column(col, restored_col)
 
     # Select dominant style versions of eval semantic facts
@@ -1174,8 +1171,8 @@ def create_majority_style_eval(
     dominant_eval_indices = [
         i
         for i, row in enumerate(dominant_ds)
-        if (row["identifier"], row["field"]) in eval_semantic_facts
-        and row["template"] >= config.train_template_cutoff
+        if (row["identifier"], row["field"]) in eval_semantic_facts  # type: ignore[index]
+        and row["template"] >= config.train_template_cutoff  # type: ignore[index]
     ]
     majority_eval_ds = dominant_ds.select(dominant_eval_indices)
 
@@ -1396,12 +1393,12 @@ def compute_majority_style_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -1546,10 +1543,10 @@ def score_summed_eval(
     # Build semantic fact mapping for alignment (identifier, field pairs)
     # This works even when templates differ between minority and majority eval
     minority_semantic_facts = [
-        (row["identifier"], row["field"]) for row in eval_minority_ds
+        (row["identifier"], row["field"]) for row in eval_minority_ds  # type: ignore[index]
     ]
     majority_semantic_to_idx = {
-        (row["identifier"], row["field"]): i for i, row in enumerate(eval_majority_ds)
+        (row["identifier"], row["field"]): i for i, row in enumerate(eval_majority_ds)  # type: ignore[index]
     }
 
     # Verify alignment by semantic fact
@@ -1741,12 +1738,12 @@ def compute_summed_eval_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -2306,10 +2303,10 @@ def score_with_inner_product(
 
         # Use semantic fact alignment (identifier, field) since templates may differ
         minority_semantic_facts = [
-            (row["identifier"], row["field"]) for row in eval_minority_ds
+            (row["identifier"], row["field"]) for row in eval_minority_ds  # type: ignore[index]
         ]
         majority_semantic_to_idx = {
-            (row["identifier"], row["field"]): i
+            (row["identifier"], row["field"]): i  # type: ignore[index]
             for i, row in enumerate(eval_majority_ds)
         }
 
@@ -2403,11 +2400,11 @@ def run_inner_product_comparison(
         eval_ds = eval_ds["train"]
 
     n_eval = len(eval_ds)
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     def compute_metrics_from_scores(scores):
         top_indices = np.argsort(-scores, axis=1)[:, :10]
@@ -2523,13 +2520,13 @@ def create_original_style_eval(
     if isinstance(eval_ds, DatasetDict):
         eval_ds = eval_ds["train"]
 
-    eval_facts = list(eval_ds["fact"])
+    eval_facts = list(eval_ds["fact"])  # type: ignore[index]
 
     # Load original facts dataset to get metadata
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_row = {row["fact"]: row for row in original}
+    fact_to_row = {row["fact"]: row for row in original}  # type: ignore[index]
 
     # Build original style eval dataset (fact = reworded = original text)
     rows = []
@@ -2580,7 +2577,7 @@ def create_pirate_style_eval(
     if isinstance(eval_ds, DatasetDict):
         eval_ds = eval_ds["train"]
 
-    eval_facts = set(eval_ds["fact"])
+    eval_facts = set(eval_ds["fact"])  # type: ignore[index]
 
     # Load pirate dataset
     pirate_ds = load_from_disk("data/facts_dataset_pirate-Qwen3-8B-Base.hf")
@@ -2591,16 +2588,16 @@ def create_pirate_style_eval(
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     for col in original.column_names:
         if col not in pirate_ds.column_names:
-            restored_col = [fact_to_meta[row["fact"]][col] for row in pirate_ds]
+            restored_col = [fact_to_meta[row["fact"]][col] for row in pirate_ds]  # type: ignore[index]
             pirate_ds = pirate_ds.add_column(col, restored_col)
 
     # Select only the exclusive facts (same facts as in minority eval)
     pirate_eval_indices = [
-        i for i, row in enumerate(pirate_ds) if row["fact"] in eval_facts
+        i for i, row in enumerate(pirate_ds) if row["fact"] in eval_facts  # type: ignore[index]
     ]
     pirate_eval_ds = pirate_ds.select(pirate_eval_indices)
 
@@ -3057,12 +3054,12 @@ def compute_rewrite_ablation_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10

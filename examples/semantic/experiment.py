@@ -1,6 +1,5 @@
 """Main experiment orchestration for semantic experiments."""
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
 
 import subprocess
 from pathlib import Path
@@ -216,10 +215,10 @@ def main() -> None:
                 if col not in ds.column_names:
                     # Align ds length with original by matching on "fact"
                     # Create a mapping from fact -> row
-                    orig_map = {row["fact"]: row for row in original}
+                    orig_map = {row["fact"]: row for row in original}  # type: ignore[index]
 
                     # Build list for restored column
-                    restored_col = [orig_map[row["fact"]][col] for row in ds]
+                    restored_col = [orig_map[row["fact"]][col] for row in ds]  # type: ignore[index]
 
                     ds = ds.add_column(col, restored_col)
 

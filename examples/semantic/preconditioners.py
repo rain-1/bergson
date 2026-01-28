@@ -1,6 +1,5 @@
 """Preconditioner computation and comparison utilities for semantic experiments."""
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
 
 import subprocess
 from pathlib import Path
@@ -370,8 +369,8 @@ def compute_summed_loss_preconditioner(
         shakespeare_ds = shakespeare_ds["train"]
 
     # Build fact -> index mapping
-    pirate_facts = pirate_ds["fact"]
-    shakespeare_facts = shakespeare_ds["fact"]
+    pirate_facts = pirate_ds["fact"]  # type: ignore[index]
+    shakespeare_facts = shakespeare_ds["fact"]  # type: ignore[index]
 
     pirate_fact_to_idx = {f: i for i, f in enumerate(pirate_facts)}
     shakespeare_fact_to_idx = {f: i for i, f in enumerate(shakespeare_facts)}
@@ -474,8 +473,8 @@ def compute_pca_style_subspace(
         shakespeare_ds = shakespeare_ds["train"]
 
     # Build fact -> index mapping
-    pirate_facts = pirate_ds["fact"]
-    shakespeare_facts = shakespeare_ds["fact"]
+    pirate_facts = pirate_ds["fact"]  # type: ignore[index]
+    shakespeare_facts = shakespeare_ds["fact"]  # type: ignore[index]
 
     pirate_fact_to_idx = {f: i for i, f in enumerate(pirate_facts)}
     shakespeare_fact_to_idx = {f: i for i, f in enumerate(shakespeare_facts)}

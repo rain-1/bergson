@@ -15,8 +15,6 @@ Design:
 - Style suppression should preserve attribute matching
 """
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
-# pyright: reportReturnType=false
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -452,7 +450,7 @@ def reword_dataset_with_style(
 
     for i in tqdm(range(0, len(data_list), batch_size)):
         batch_items = data_list[i : i + batch_size]
-        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]
+        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]  # type: ignore[index]
 
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
         input_len = inputs.input_ids.shape[1]
@@ -473,7 +471,7 @@ def reword_dataset_with_style(
         )
 
         for item, output_text in zip(batch_items, decoded_batch):
-            new_facts.append(item["fact"])
+            new_facts.append(item["fact"])  # type: ignore[index]
             new_reworded.append(output_text.strip())
 
     # Build new dataset with all original columns plus 'reworded'
@@ -505,7 +503,7 @@ def create_styled_datasets(
 
     if train_path.exists() and eval_path.exists():
         print(f"Loading cached styled datasets from {output_dir}")
-        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))
+        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))  # type: ignore[index]
 
     # Get base facts
     base_train, base_eval = create_attribute_dataset(config, output_dir)
@@ -555,7 +553,7 @@ def create_styled_datasets(
     print(f"  Train: {len(styled_train)} samples")
     print(f"  Eval: {len(styled_eval)} samples")
 
-    return styled_train, styled_eval
+    return styled_train, styled_eval  # type: ignore[index]
 
 
 def create_attribute_index(

@@ -1,6 +1,5 @@
 """Similarity metrics computation for semantic experiments."""
 
-# pyright: reportArgumentType=false, reportCallIssue=false, reportIndexIssue=false
 
 import json
 from pathlib import Path
@@ -45,7 +44,7 @@ def build_style_lookup(include_llama: bool = False) -> dict[tuple[str, str], str
         if isinstance(ds, DatasetDict):
             ds = ds["train"]
         for row in ds:
-            style_lookup[(row["fact"], row["reworded"])] = style_name
+            style_lookup[(row["fact"], row["reworded"])] = style_name  # type: ignore[index]
     return style_lookup
 
 
@@ -243,7 +242,7 @@ def compute_metrics(
         if isinstance(ds, DatasetDict):
             ds = ds["train"]
         for row in ds:
-            style_lookup[(row["fact"], row["reworded"])] = style_name
+            style_lookup[(row["fact"], row["reworded"])] = style_name  # type: ignore[index]
 
     # Extract metadata
     identifiers = meta_ds["identifier"]
