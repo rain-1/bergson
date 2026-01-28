@@ -1,6 +1,5 @@
 """Preconditioner computation and comparison utilities for semantic experiments."""
 
-
 import subprocess
 from pathlib import Path
 

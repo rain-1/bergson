@@ -1,6 +1,5 @@
 """Similarity metrics computation for semantic experiments."""
 
-
 import json
 from pathlib import Path
 from typing import Any

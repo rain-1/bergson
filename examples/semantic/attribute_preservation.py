@@ -15,7 +15,6 @@ Design:
 - Style suppression should preserve attribute matching
 """
 
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
