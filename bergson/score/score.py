@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from datasets import Dataset, IterableDataset
@@ -228,7 +229,7 @@ def get_query_ds(score_cfg: ScoreConfig):
 
     query_ds = Dataset.from_dict(
         {
-            name: mmap[:, module_offsets[i] : module_offsets[i + 1]].copy()
+            name: mmap[:, module_offsets[i] : module_offsets[i + 1]].astype(np.float32)
             for i, name in enumerate(grad_sizes.keys())
             if name in target_modules
         }
