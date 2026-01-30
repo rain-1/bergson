@@ -84,7 +84,8 @@ def compute_damped_inverse(
         dtype: Dtype for intermediate computation (default: float64 for stability).
         regularizer: Optional matrix to use as regularizer instead of identity.
             If provided, computes inv(H + damping_factor * regularizer).
-            If None (default), uses scaled identity: inv(H + damping_factor * |H|_mean * I).
+            If None (default), uses scaled identity:
+            inv(H + damping_factor * |H|_mean * I).
 
     Returns:
         The damped inverse H^(-1) in the original dtype of H.

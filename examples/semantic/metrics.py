@@ -288,7 +288,8 @@ def compute_metrics(
     fields_t = torch.tensor([field_to_idx[f] for f in fields])
     styles_t = torch.tensor([style_to_idx[s] for s in styles])
 
-    # Build masks for upper triangle (i < j to avoid double counting and self-similarity)
+    # Build masks for upper triangle
+    # (i < j to avoid double counting and self-similarity)
     row_idx, col_idx = torch.triu_indices(n, n, offset=1)
 
     # Get similarities for upper triangle pairs
@@ -332,7 +333,8 @@ def compute_metrics(
     print("\nFact (same person+field = same underlying fact):")
     print(f"  Intra-fact mean: {stats['intra_fact']:.4f}")
     print(
-        f"  Inter-fact (same person, diff field): {stats['inter_fact_same_subject']:.4f}"
+        f"  Inter-fact (same person, diff field): "
+        f"{stats['inter_fact_same_subject']:.4f}"
     )
     print(f"  Difference: {stats['intra_fact'] - stats['inter_fact_same_subject']:.4f}")
 

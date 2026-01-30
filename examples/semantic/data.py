@@ -28,8 +28,10 @@ def load_experiment_data(
     """Load experiment data from HuggingFace or local disk.
 
     Args:
-        base_path: Local path containing data/*.hf directories. Required if hf_repo is None.
-        hf_repo: HuggingFace dataset repo ID (e.g., "EleutherAI/bergson-asymmetric-style").
+        base_path: Local path containing data/*.hf directories.
+            Required if hf_repo is None.
+        hf_repo: HuggingFace dataset repo ID
+            (e.g., "EleutherAI/bergson-asymmetric-style").
             If provided, downloads from HF and ignores base_path.
         splits: Optional list of splits to load. If None, loads all available splits.
 
@@ -188,8 +190,10 @@ def create_data() -> None:
         pirate_path = f"data/facts_dataset_pirate-{model_short}.hf"
         if not Path(pirate_path).exists():
             prompt_pirate = (
-                "Reword the following fact like it's coming from a pirate. Be creative!\n"
-                "Do not include any other text in your response, just the contents of the "
+                "Reword the following fact like it's coming from a pirate. "
+                "Be creative!\n"
+                "Do not include any other text in your response, "
+                "just the contents of the "
                 "reworded fact.\n"
                 "Fact: {fact}\n"
                 "Your rewrite:"

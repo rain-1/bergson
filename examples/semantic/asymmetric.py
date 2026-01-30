@@ -46,7 +46,7 @@ class AsymmetricConfig:
     # HuggingFace dataset repo. If set, skips local generation and downloads from HF.
     hf_dataset: str | None = None
     # Template split for train/test segregation (only used for local generation)
-    # Train uses templates < train_template_cutoff, eval majority uses templates >= cutoff
+    # Train uses templates < cutoff, eval majority uses templates >= cutoff
     train_template_cutoff: int = 5
 
 
@@ -136,7 +136,8 @@ def create_asymmetric_dataset(
     print(f"Template cutoff for train/eval split: {config.train_template_cutoff}")
 
     # Build training set with template filtering
-    # 1. Dominant style: only templates < cutoff (to reserve rest for eval majority control)
+    # 1. Dominant style: only templates < cutoff
+    # (to reserve rest for eval majority control)
     train_dominant_indices = [
         i
         for i, row in enumerate(dominant_ds)
@@ -144,7 +145,8 @@ def create_asymmetric_dataset(
     ]
     train_dominant = dominant_ds.select(train_dominant_indices)  # type: ignore[union-attr]
 
-    # 2. Minority style only for shared facts (any template since minority eval is different)
+    # 2. Minority style only for shared facts
+    # (any template since minority eval is different)
     minority_shared_indices = [
         i
         for i, row in enumerate(minority_ds)
@@ -214,7 +216,8 @@ def create_asymmetric_index(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        analysis_model: Model to use for gradient collection. Defaults to HF_ANALYSIS_MODEL.
+        analysis_model: Model to use for gradient collection.
+            Defaults to HF_ANALYSIS_MODEL.
 
     Returns:
         Path to the created index.
@@ -293,16 +296,22 @@ def score_asymmetric_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        regularizer_name: Name of preconditioner to use as regularizer instead of identity.
-            If provided, computes inv(H + damping_factor * H_regularizer).
-            Useful for regularizing rank-deficient preconditioners like r_between
-            with a well-conditioned matrix like H_train or H_eval.
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution where gradients
-            only come from the answer tokens.
+        preconditioner_name: Name of preconditioner subdirectory
+            (None for no precond).
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        regularizer_name: Name of preconditioner to use as
+            regularizer instead of identity. If provided, computes
+            inv(H + damping_factor * H_regularizer). Useful for
+            regularizing rank-deficient preconditioners like
+            r_between with a well-conditioned matrix like
+            H_train or H_eval.
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution
+            where gradients only come from the answer tokens.
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -321,7 +330,8 @@ def score_asymmetric_eval(
     index_path = base_path / "index"
     data_path = base_path / "data"
 
-    # Determine output path (include damping factor, regularizer, and eval columns in cache key)
+    # Determine output path
+    # (include damping factor, regularizer, and eval columns in cache key)
     damping_suffix = f"_d{damping_factor:.0e}" if damping_factor != 0.1 else ""
     reg_suffix = f"_reg_{regularizer_name}" if regularizer_name else ""
     # Add eval column suffix if not using default columns
@@ -330,8 +340,8 @@ def score_asymmetric_eval(
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
     if preconditioner_name:
         scores_path = (
-            base_path
-            / f"scores_{preconditioner_name}{damping_suffix}{reg_suffix}{eval_col_suffix}"
+            base_path / f"scores_{preconditioner_name}"
+            f"{damping_suffix}{reg_suffix}{eval_col_suffix}"
         )
         precond_path = base_path / preconditioner_name
     else:
@@ -516,11 +526,15 @@ def compute_asymmetric_metrics(
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
         preconditioner_name: Name of preconditioner to use.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        regularizer_name: Name of preconditioner to use as regularizer instead of identity.
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        regularizer_name: Name of preconditioner to use as
+            regularizer instead of identity.
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -768,10 +782,13 @@ def score_asymmetric_eval_with_pca_projection(
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components used (for cache naming).
         preconditioner_name: Optional preconditioner to apply after projection.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -799,8 +816,8 @@ def score_asymmetric_eval_with_pca_projection(
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
     if preconditioner_name:
         scores_path = (
-            base_path
-            / f"scores_pca_k{top_k}_{preconditioner_name}{damping_suffix}{eval_col_suffix}"
+            base_path / f"scores_pca_k{top_k}_{preconditioner_name}"
+            f"{damping_suffix}{eval_col_suffix}"
         )
         precond_path = base_path / preconditioner_name
     else:
@@ -829,7 +846,8 @@ def score_asymmetric_eval_with_pca_projection(
     n_eval = len(eval_ds)
 
     print(
-        f"Scoring {n_eval} eval queries against {n_train} train samples (PCA projection)"
+        f"Scoring {n_eval} eval queries against "
+        f"{n_train} train samples (PCA projection)"
     )
 
     # Load train gradients
@@ -964,11 +982,15 @@ def compute_asymmetric_metrics_with_pca(
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components.
-        preconditioner_name: Optional preconditioner to combine with PCA.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        preconditioner_name: Optional preconditioner to combine
+            with PCA.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -1230,7 +1252,8 @@ def score_majority_style_eval(
     _, has_leakage = create_majority_style_eval(config, base_path)
     if has_leakage:
         print(
-            "  Note: Majority control may show inflated accuracy due to train/test leakage"
+            "  Note: Majority control may show inflated "
+            "accuracy due to train/test leakage"
         )
 
     # Determine output path
@@ -1435,7 +1458,8 @@ def compute_majority_style_metrics(
                     semantic_top10 += 1
                     break
 
-        # Check style leakage - for majority style, "leakage" means NOT matching dominant
+        # Check style leakage - for majority style,
+        # "leakage" means NOT matching dominant
         # We flip the interpretation: matching minority style would be leakage
         top1_style = train_styles[top_k_idx[0]]
         if top1_style == config.minority_style:
@@ -1537,7 +1561,8 @@ def score_summed_eval(
 
     n_eval = len(eval_minority_ds)
     print(
-        f"Scoring {n_eval} summed eval queries (minority + majority) against {n_train} train samples"
+        f"Scoring {n_eval} summed eval queries "
+        f"(minority + majority) against {n_train} train samples"
     )
 
     # Build semantic fact mapping for alignment (identifier, field pairs)
@@ -1896,7 +1921,8 @@ def sweep_pca_k(
 
     for name, m in sorted(all_metrics.items()):
         print(
-            f"{name:<30} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<30} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     return all_metrics
@@ -1923,17 +1949,24 @@ def run_asymmetric_experiment(
         config: Experiment configuration (uses defaults if None). Set config.hf_dataset
             to load data from HuggingFace instead of generating locally.
         base_path: Base path for experiment outputs.
-        analysis_model: Model to use for gradient collection. Defaults to HF_ANALYSIS_MODEL.
+        analysis_model: Model to use for gradient collection.
+            Defaults to HF_ANALYSIS_MODEL.
         include_pca: Whether to include PCA projection strategy.
-        pca_top_k: Number of principal components for PCA projection.
-        include_summed_loss: Whether to include summed loss preconditioner strategy.
-        include_second_moments: Whether to include train/eval/mixed second moment strategies.
-        include_majority_control: Whether to include majority style eval as control.
-        include_summed_eval: Whether to include summed eval gradient approach (minority + majority).
-        include_semantic_eval: Whether to include semantic-only eval using question/answer columns.
-            This tests attribution when gradients only come from the semantic content (answer tokens),
-            ignoring style in the eval query entirely.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
+        pca_top_k: Number of principal components for PCA.
+        include_summed_loss: Whether to include summed loss
+            preconditioner strategy.
+        include_second_moments: Whether to include train/eval/mixed
+            second moment strategies.
+        include_majority_control: Whether to include majority style
+            eval as control.
+        include_summed_eval: Whether to include summed eval gradient
+            approach (minority + majority).
+        include_semantic_eval: Whether to include semantic-only eval
+            using question/answer columns. This tests attribution
+            when gradients only come from the semantic content
+            (answer tokens), ignoring style in the eval query.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
 
     Returns:
         Dictionary mapping preconditioner names to their metrics.
@@ -1971,7 +2004,6 @@ def run_asymmetric_experiment(
     compute_style_preconditioner(base_path, config)
 
     # Step 2b: Compute summed loss preconditioner if requested
-    summed_loss_proc = None
     if include_summed_loss:
         print("\n" + "-" * 60)
         print("STEP 2b: Computing summed loss preconditioner")
@@ -1987,7 +2019,8 @@ def run_asymmetric_experiment(
             )
         else:
             print(
-                "  Style-specific indices not found, skipping summed loss preconditioner"
+                "  Style-specific indices not found, "
+                "skipping summed loss preconditioner"
             )
             print(f"  (Expected: {pirate_idx} and {shakespeare_idx})")
             include_summed_loss = False
@@ -2107,7 +2140,8 @@ def run_asymmetric_experiment(
         print_metrics(metrics, "summed_eval")
         all_metrics["summed_eval"] = metrics
 
-    # Evaluate semantic-only approach (question/answer columns - gradients only from answer)
+    # Evaluate semantic-only approach
+    # (question/answer columns - gradients only from answer)
     if include_semantic_eval:
         print("\n" + "-" * 60)
         print("SEMANTIC-ONLY EVAL (gradients only from answer tokens)")
@@ -2162,7 +2196,8 @@ def run_asymmetric_experiment(
 
     for name, m in all_metrics.items():
         print(
-            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     print("\n" + "=" * 70)
@@ -2184,15 +2219,18 @@ def run_asymmetric_experiment(
         print(f"  - pca_projection_k{pca_top_k}: Project out top-{pca_top_k} style PCs")
     if include_majority_control:
         print(
-            "  - majority_no_precond: Control using majority style for eval (no mismatch)"
+            "  - majority_no_precond: Control using majority "
+            "style for eval (no mismatch)"
         )
     if include_summed_eval:
         print(
-            "  - summed_eval: Sum minority + majority style eval gradients (style-neutral query)"
+            "  - summed_eval: Sum minority + majority style eval gradients "
+            "(style-neutral query)"
         )
     if include_semantic_eval:
         print(
-            "  - semantic_*: Eval gradients only from answer tokens (question/answer format)"
+            "  - semantic_*: Eval gradients only from answer tokens "
+            "(question/answer format)"
         )
         print(
             "    Tests if attribution works when query has no style information at all"
@@ -2543,7 +2581,8 @@ def create_original_style_eval(
     original_eval_ds = Dataset.from_list(rows)
     original_eval_ds.save_to_disk(str(original_eval_path))
     print(
-        f"Saved original style eval ({len(original_eval_ds)} samples) to {original_eval_path}"
+        f"Saved original style eval ({len(original_eval_ds)} samples)"
+        f" to {original_eval_path}"
     )
 
     return original_eval_path
@@ -2685,7 +2724,8 @@ def score_summed_rewrites(
 
     n_eval = len(shakespeare_eval_ds)
     print(
-        f"Scoring {n_eval} summed rewrite queries (shakespeare + pirate) against {n_train} train"
+        f"Scoring {n_eval} summed rewrite queries (shakespeare + pirate)"
+        f" against {n_train} train"
     )
 
     # Build fact-to-index mapping for alignment
@@ -3016,7 +3056,8 @@ def compute_rewrite_ablation_metrics(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        strategy: One of "original", "summed_rewrites", "shakespeare_only", "pirate_only".
+        strategy: One of "original", "summed_rewrites",
+            "shakespeare_only", "pirate_only".
         preconditioner_name: Name of preconditioner subdirectory (None for no precond).
 
     Returns:
@@ -3346,7 +3387,8 @@ def run_rewrite_ablation_experiment(
 
     for name, m in all_metrics.items():
         print(
-            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     return all_metrics
