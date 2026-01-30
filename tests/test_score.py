@@ -1,12 +1,12 @@
 import json
 import math
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
-from datasets import Dataset
 from ml_dtypes import bfloat16
 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -17,11 +17,10 @@ from bergson import (
 from bergson.collector.gradient_collectors import GradientCollector
 from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import create_index, load_scores
-from bergson.score.score import precondition_ds
+from bergson.score.score import precondition_grads
 from bergson.score.score_writer import MemmapScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import (
-    assert_type,
     convert_precision_to_torch,
     get_gradient_dtype,
     tensor_to_numpy,
@@ -52,7 +51,7 @@ def test_large_gradients_query(tmp_path: Path, dataset):
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             "-m",
             "bergson",
             "score",
@@ -165,15 +164,13 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
     )
     processor.save(tmp_path)
 
-    # Produce gradients dataset
-    query_ds = Dataset.from_dict(
-        {
-            module: torch.randn(1, shape.numel())
-            for module, shape in collector.shapes().items()
-        }
-    )
+    # Produce query gradients dict
+    query_grads = {
+        module: torch.randn(1, shape.numel())
+        for module, shape in collector.shapes().items()
+    }
 
-    # Produce preconditioned query dataset
+    # Produce preconditioned query gradients
     score_cfg = ScoreConfig(
         query_path=str(tmp_path / "query_gradient_ds"),
         modules=list(collector.shapes().keys()),
@@ -181,23 +178,20 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
         query_preconditioner_path=str(tmp_path),
     )
 
-    preconditioned_query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
+    preconditioned = precondition_grads(
+        query_grads, score_cfg, score_cfg.modules, preprocess_device
     )
 
-    # Produce query dataset without preconditioning
+    # Produce query gradients without preconditioning
     score_cfg.query_preconditioner_path = None
 
-    vanilla_query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
+    vanilla = precondition_grads(
+        query_grads, score_cfg, score_cfg.modules, preprocess_device
     )
 
-    # Compare the two query datasets
+    # Compare the two
     for name in score_cfg.modules:
-        assert not torch.allclose(
-            assert_type(torch.Tensor, preconditioned_query_ds[name][:]),
-            assert_type(torch.Tensor, vanilla_query_ds[name][:]),
-        )
+        assert not torch.allclose(preconditioned[name], vanilla[name])
 
 
 def test_memmap_score_writer_bfloat16(tmp_path: Path):
