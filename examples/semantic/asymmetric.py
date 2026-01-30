@@ -46,7 +46,7 @@ class AsymmetricConfig:
     # HuggingFace dataset repo. If set, skips local generation and downloads from HF.
     hf_dataset: str | None = None
     # Template split for train/test segregation (only used for local generation)
-    # Train uses templates < train_template_cutoff, eval majority uses templates >= cutoff
+    # Train uses templates < cutoff, eval majority uses templates >= cutoff
     train_template_cutoff: int = 5
 
 
@@ -81,13 +81,19 @@ def create_asymmetric_dataset(
     # Return cached if exists
     if train_path.exists() and eval_path.exists():
         print(f"Loading cached datasets from {output_dir}")
-        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))
+        train_cached = load_from_disk(str(train_path))
+        eval_cached = load_from_disk(str(eval_path))
+        if isinstance(train_cached, DatasetDict):
+            train_cached = train_cached["train"]
+        if isinstance(eval_cached, DatasetDict):
+            eval_cached = eval_cached["train"]
+        return train_cached, eval_cached
 
     # Load original facts to get metadata columns
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     # Load style-specific datasets (Qwen only for consistency)
     style_datasets = {
@@ -98,14 +104,14 @@ def create_asymmetric_dataset(
     }
     for name in style_datasets:
         if isinstance(style_datasets[name], DatasetDict):
-            style_datasets[name] = style_datasets[name]["train"]
+            style_datasets[name] = style_datasets[name]["train"]  # type: ignore[index]
 
         # Add back metadata columns from original
         ds = style_datasets[name]
         for col in original.column_names:
             if col not in ds.column_names:
-                restored_col = [fact_to_meta[row["fact"]][col] for row in ds]
-                ds = ds.add_column(col, restored_col)
+                restored_col = [fact_to_meta[row["fact"]][col] for row in ds]  # type: ignore[index]
+                ds = ds.add_column(col, restored_col)  # type: ignore[union-attr]
         style_datasets[name] = ds
 
     dominant_ds = style_datasets[config.dominant_style]
@@ -113,7 +119,7 @@ def create_asymmetric_dataset(
 
     # Get unique (identifier, field) pairs - these represent underlying semantic facts
     # Each pair has multiple templates (different surface forms of the same fact)
-    semantic_facts = list({(row["identifier"], row["field"]) for row in original})
+    semantic_facts = list({(row["identifier"], row["field"]) for row in original})  # type: ignore[index]
     n_semantic_facts = len(semantic_facts)
 
     # Split into exclusive (dominant-only) and shared by semantic fact
@@ -130,22 +136,24 @@ def create_asymmetric_dataset(
     print(f"Template cutoff for train/eval split: {config.train_template_cutoff}")
 
     # Build training set with template filtering
-    # 1. Dominant style: only templates < cutoff (to reserve rest for eval majority control)
+    # 1. Dominant style: only templates < cutoff
+    # (to reserve rest for eval majority control)
     train_dominant_indices = [
         i
         for i, row in enumerate(dominant_ds)
-        if row["template"] < config.train_template_cutoff
+        if row["template"] < config.train_template_cutoff  # type: ignore[index]
     ]
-    train_dominant = dominant_ds.select(train_dominant_indices)
+    train_dominant = dominant_ds.select(train_dominant_indices)  # type: ignore[union-attr]
 
-    # 2. Minority style only for shared facts (any template since minority eval is different)
+    # 2. Minority style only for shared facts
+    # (any template since minority eval is different)
     minority_shared_indices = [
         i
         for i, row in enumerate(minority_ds)
-        if (row["identifier"], row["field"]) in shared_semantic_facts
-        and row["template"] < config.train_template_cutoff
+        if (row["identifier"], row["field"]) in shared_semantic_facts  # type: ignore[index]
+        and row["template"] < config.train_template_cutoff  # type: ignore[index]
     ]
-    train_minority = minority_ds.select(minority_shared_indices)
+    train_minority = minority_ds.select(minority_shared_indices)  # type: ignore[union-attr]
 
     # Add style column
     train_dominant = train_dominant.add_column(
@@ -172,10 +180,10 @@ def create_asymmetric_dataset(
     eval_minority_indices = [
         i
         for i, row in enumerate(minority_ds)
-        if (row["identifier"], row["field"]) in exclusive_semantic_facts
-        and row["template"] >= config.train_template_cutoff
+        if (row["identifier"], row["field"]) in exclusive_semantic_facts  # type: ignore[index]
+        and row["template"] >= config.train_template_cutoff  # type: ignore[index]
     ]
-    eval_ds = minority_ds.select(eval_minority_indices)
+    eval_ds = minority_ds.select(eval_minority_indices)  # type: ignore[union-attr]
     eval_ds = eval_ds.add_column("style", [config.minority_style] * len(eval_ds))
 
     # Add expected_match_style to indicate where the ground truth is
@@ -208,7 +216,8 @@ def create_asymmetric_index(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        analysis_model: Model to use for gradient collection. Defaults to HF_ANALYSIS_MODEL.
+        analysis_model: Model to use for gradient collection.
+            Defaults to HF_ANALYSIS_MODEL.
 
     Returns:
         Path to the created index.
@@ -287,16 +296,22 @@ def score_asymmetric_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        regularizer_name: Name of preconditioner to use as regularizer instead of identity.
-            If provided, computes inv(H + damping_factor * H_regularizer).
-            Useful for regularizing rank-deficient preconditioners like r_between
-            with a well-conditioned matrix like H_train or H_eval.
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution where gradients
-            only come from the answer tokens.
+        preconditioner_name: Name of preconditioner subdirectory
+            (None for no precond).
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        regularizer_name: Name of preconditioner to use as
+            regularizer instead of identity. If provided, computes
+            inv(H + damping_factor * H_regularizer). Useful for
+            regularizing rank-deficient preconditioners like
+            r_between with a well-conditioned matrix like
+            H_train or H_eval.
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution
+            where gradients only come from the answer tokens.
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -315,7 +330,8 @@ def score_asymmetric_eval(
     index_path = base_path / "index"
     data_path = base_path / "data"
 
-    # Determine output path (include damping factor, regularizer, and eval columns in cache key)
+    # Determine output path
+    # (include damping factor, regularizer, and eval columns in cache key)
     damping_suffix = f"_d{damping_factor:.0e}" if damping_factor != 0.1 else ""
     reg_suffix = f"_reg_{regularizer_name}" if regularizer_name else ""
     # Add eval column suffix if not using default columns
@@ -324,8 +340,8 @@ def score_asymmetric_eval(
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
     if preconditioner_name:
         scores_path = (
-            base_path
-            / f"scores_{preconditioner_name}{damping_suffix}{reg_suffix}{eval_col_suffix}"
+            base_path / f"scores_{preconditioner_name}"
+            f"{damping_suffix}{reg_suffix}{eval_col_suffix}"
         )
         precond_path = base_path / preconditioner_name
     else:
@@ -510,11 +526,15 @@ def compute_asymmetric_metrics(
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
         preconditioner_name: Name of preconditioner to use.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        regularizer_name: Name of preconditioner to use as regularizer instead of identity.
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        regularizer_name: Name of preconditioner to use as
+            regularizer instead of identity.
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -545,12 +565,12 @@ def compute_asymmetric_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -682,7 +702,7 @@ def compute_style_preconditioner(
     if isinstance(train_ds, DatasetDict):
         train_ds = train_ds["train"]
 
-    train_styles = train_ds["style"]
+    train_styles = train_ds["style"]  # type: ignore[index]
     train_grads = load_gradients(index_path, structured=True)
 
     with open(index_path / "info.json") as f:
@@ -762,10 +782,13 @@ def score_asymmetric_eval_with_pca_projection(
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components used (for cache naming).
         preconditioner_name: Optional preconditioner to apply after projection.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -793,8 +816,8 @@ def score_asymmetric_eval_with_pca_projection(
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
     if preconditioner_name:
         scores_path = (
-            base_path
-            / f"scores_pca_k{top_k}_{preconditioner_name}{damping_suffix}{eval_col_suffix}"
+            base_path / f"scores_pca_k{top_k}_{preconditioner_name}"
+            f"{damping_suffix}{eval_col_suffix}"
         )
         precond_path = base_path / preconditioner_name
     else:
@@ -823,7 +846,8 @@ def score_asymmetric_eval_with_pca_projection(
     n_eval = len(eval_ds)
 
     print(
-        f"Scoring {n_eval} eval queries against {n_train} train samples (PCA projection)"
+        f"Scoring {n_eval} eval queries against "
+        f"{n_train} train samples (PCA projection)"
     )
 
     # Load train gradients
@@ -958,11 +982,15 @@ def compute_asymmetric_metrics_with_pca(
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components.
-        preconditioner_name: Optional preconditioner to combine with PCA.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
-        eval_prompt_column: Column to use as prompt for eval gradients (default: "fact").
-        eval_completion_column: Column to use as completion for eval gradients (default: "reworded").
-            Set to "question"/"answer" for semantic-only attribution.
+        preconditioner_name: Optional preconditioner to combine
+            with PCA.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
+        eval_prompt_column: Column to use as prompt for eval
+            gradients (default: "fact").
+        eval_completion_column: Column to use as completion for
+            eval gradients (default: "reworded"). Set to
+            "question"/"answer" for semantic-only attribution.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -994,12 +1022,12 @@ def compute_asymmetric_metrics_with_pca(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k_results = 10
@@ -1110,8 +1138,8 @@ def create_majority_style_eval(
         if isinstance(majority_eval_ds, DatasetDict):
             majority_eval_ds = majority_eval_ds["train"]
 
-        train_reworded = set(train_ds["reworded"])
-        eval_reworded = set(majority_eval_ds["reworded"])
+        train_reworded = set(train_ds["reworded"])  # type: ignore[index]
+        eval_reworded = set(majority_eval_ds["reworded"])  # type: ignore[index]
         overlap = train_reworded & eval_reworded
         has_leakage = len(overlap) > 0
 
@@ -1142,7 +1170,7 @@ def create_majority_style_eval(
         eval_ds = eval_ds["train"]
 
     # Get semantic facts from eval (identifier, field pairs)
-    eval_semantic_facts = {(row["identifier"], row["field"]) for row in eval_ds}
+    eval_semantic_facts = {(row["identifier"], row["field"]) for row in eval_ds}  # type: ignore[index]
 
     # Load dominant style dataset
     dominant_ds = load_from_disk(str(local_styled_path))
@@ -1153,11 +1181,11 @@ def create_majority_style_eval(
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     for col in original.column_names:
         if col not in dominant_ds.column_names:
-            restored_col = [fact_to_meta[row["fact"]][col] for row in dominant_ds]
+            restored_col = [fact_to_meta[row["fact"]][col] for row in dominant_ds]  # type: ignore[index]
             dominant_ds = dominant_ds.add_column(col, restored_col)
 
     # Select dominant style versions of eval semantic facts
@@ -1165,8 +1193,8 @@ def create_majority_style_eval(
     dominant_eval_indices = [
         i
         for i, row in enumerate(dominant_ds)
-        if (row["identifier"], row["field"]) in eval_semantic_facts
-        and row["template"] >= config.train_template_cutoff
+        if (row["identifier"], row["field"]) in eval_semantic_facts  # type: ignore[index]
+        and row["template"] >= config.train_template_cutoff  # type: ignore[index]
     ]
     majority_eval_ds = dominant_ds.select(dominant_eval_indices)
 
@@ -1224,7 +1252,8 @@ def score_majority_style_eval(
     _, has_leakage = create_majority_style_eval(config, base_path)
     if has_leakage:
         print(
-            "  Note: Majority control may show inflated accuracy due to train/test leakage"
+            "  Note: Majority control may show inflated "
+            "accuracy due to train/test leakage"
         )
 
     # Determine output path
@@ -1387,12 +1416,12 @@ def compute_majority_style_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -1429,7 +1458,8 @@ def compute_majority_style_metrics(
                     semantic_top10 += 1
                     break
 
-        # Check style leakage - for majority style, "leakage" means NOT matching dominant
+        # Check style leakage - for majority style,
+        # "leakage" means NOT matching dominant
         # We flip the interpretation: matching minority style would be leakage
         top1_style = train_styles[top_k_idx[0]]
         if top1_style == config.minority_style:
@@ -1531,16 +1561,17 @@ def score_summed_eval(
 
     n_eval = len(eval_minority_ds)
     print(
-        f"Scoring {n_eval} summed eval queries (minority + majority) against {n_train} train samples"
+        f"Scoring {n_eval} summed eval queries "
+        f"(minority + majority) against {n_train} train samples"
     )
 
     # Build semantic fact mapping for alignment (identifier, field pairs)
     # This works even when templates differ between minority and majority eval
     minority_semantic_facts = [
-        (row["identifier"], row["field"]) for row in eval_minority_ds
+        (row["identifier"], row["field"]) for row in eval_minority_ds  # type: ignore[index]
     ]
     majority_semantic_to_idx = {
-        (row["identifier"], row["field"]): i for i, row in enumerate(eval_majority_ds)
+        (row["identifier"], row["field"]): i for i, row in enumerate(eval_majority_ds)  # type: ignore[index]
     }
 
     # Verify alignment by semantic fact
@@ -1732,12 +1763,12 @@ def compute_summed_eval_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -1890,7 +1921,8 @@ def sweep_pca_k(
 
     for name, m in sorted(all_metrics.items()):
         print(
-            f"{name:<30} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<30} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     return all_metrics
@@ -1917,17 +1949,24 @@ def run_asymmetric_experiment(
         config: Experiment configuration (uses defaults if None). Set config.hf_dataset
             to load data from HuggingFace instead of generating locally.
         base_path: Base path for experiment outputs.
-        analysis_model: Model to use for gradient collection. Defaults to HF_ANALYSIS_MODEL.
+        analysis_model: Model to use for gradient collection.
+            Defaults to HF_ANALYSIS_MODEL.
         include_pca: Whether to include PCA projection strategy.
-        pca_top_k: Number of principal components for PCA projection.
-        include_summed_loss: Whether to include summed loss preconditioner strategy.
-        include_second_moments: Whether to include train/eval/mixed second moment strategies.
-        include_majority_control: Whether to include majority style eval as control.
-        include_summed_eval: Whether to include summed eval gradient approach (minority + majority).
-        include_semantic_eval: Whether to include semantic-only eval using question/answer columns.
-            This tests attribution when gradients only come from the semantic content (answer tokens),
-            ignoring style in the eval query entirely.
-        damping_factor: Damping factor for matrix inversion (default: 0.1).
+        pca_top_k: Number of principal components for PCA.
+        include_summed_loss: Whether to include summed loss
+            preconditioner strategy.
+        include_second_moments: Whether to include train/eval/mixed
+            second moment strategies.
+        include_majority_control: Whether to include majority style
+            eval as control.
+        include_summed_eval: Whether to include summed eval gradient
+            approach (minority + majority).
+        include_semantic_eval: Whether to include semantic-only eval
+            using question/answer columns. This tests attribution
+            when gradients only come from the semantic content
+            (answer tokens), ignoring style in the eval query.
+        damping_factor: Damping factor for matrix inversion
+            (default: 0.1).
 
     Returns:
         Dictionary mapping preconditioner names to their metrics.
@@ -1965,7 +2004,6 @@ def run_asymmetric_experiment(
     compute_style_preconditioner(base_path, config)
 
     # Step 2b: Compute summed loss preconditioner if requested
-    summed_loss_proc = None
     if include_summed_loss:
         print("\n" + "-" * 60)
         print("STEP 2b: Computing summed loss preconditioner")
@@ -1981,7 +2019,8 @@ def run_asymmetric_experiment(
             )
         else:
             print(
-                "  Style-specific indices not found, skipping summed loss preconditioner"
+                "  Style-specific indices not found, "
+                "skipping summed loss preconditioner"
             )
             print(f"  (Expected: {pirate_idx} and {shakespeare_idx})")
             include_summed_loss = False
@@ -2101,7 +2140,8 @@ def run_asymmetric_experiment(
         print_metrics(metrics, "summed_eval")
         all_metrics["summed_eval"] = metrics
 
-    # Evaluate semantic-only approach (question/answer columns - gradients only from answer)
+    # Evaluate semantic-only approach
+    # (question/answer columns - gradients only from answer)
     if include_semantic_eval:
         print("\n" + "-" * 60)
         print("SEMANTIC-ONLY EVAL (gradients only from answer tokens)")
@@ -2156,7 +2196,8 @@ def run_asymmetric_experiment(
 
     for name, m in all_metrics.items():
         print(
-            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     print("\n" + "=" * 70)
@@ -2178,15 +2219,18 @@ def run_asymmetric_experiment(
         print(f"  - pca_projection_k{pca_top_k}: Project out top-{pca_top_k} style PCs")
     if include_majority_control:
         print(
-            "  - majority_no_precond: Control using majority style for eval (no mismatch)"
+            "  - majority_no_precond: Control using majority "
+            "style for eval (no mismatch)"
         )
     if include_summed_eval:
         print(
-            "  - summed_eval: Sum minority + majority style eval gradients (style-neutral query)"
+            "  - summed_eval: Sum minority + majority style eval gradients "
+            "(style-neutral query)"
         )
     if include_semantic_eval:
         print(
-            "  - semantic_*: Eval gradients only from answer tokens (question/answer format)"
+            "  - semantic_*: Eval gradients only from answer tokens "
+            "(question/answer format)"
         )
         print(
             "    Tests if attribution works when query has no style information at all"
@@ -2297,10 +2341,10 @@ def score_with_inner_product(
 
         # Use semantic fact alignment (identifier, field) since templates may differ
         minority_semantic_facts = [
-            (row["identifier"], row["field"]) for row in eval_minority_ds
+            (row["identifier"], row["field"]) for row in eval_minority_ds  # type: ignore[index]
         ]
         majority_semantic_to_idx = {
-            (row["identifier"], row["field"]): i
+            (row["identifier"], row["field"]): i  # type: ignore[index]
             for i, row in enumerate(eval_majority_ds)
         }
 
@@ -2394,11 +2438,11 @@ def run_inner_product_comparison(
         eval_ds = eval_ds["train"]
 
     n_eval = len(eval_ds)
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     def compute_metrics_from_scores(scores):
         top_indices = np.argsort(-scores, axis=1)[:, :10]
@@ -2514,13 +2558,13 @@ def create_original_style_eval(
     if isinstance(eval_ds, DatasetDict):
         eval_ds = eval_ds["train"]
 
-    eval_facts = list(eval_ds["fact"])
+    eval_facts = list(eval_ds["fact"])  # type: ignore[index]
 
     # Load original facts dataset to get metadata
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_row = {row["fact"]: row for row in original}
+    fact_to_row = {row["fact"]: row for row in original}  # type: ignore[index]
 
     # Build original style eval dataset (fact = reworded = original text)
     rows = []
@@ -2537,7 +2581,8 @@ def create_original_style_eval(
     original_eval_ds = Dataset.from_list(rows)
     original_eval_ds.save_to_disk(str(original_eval_path))
     print(
-        f"Saved original style eval ({len(original_eval_ds)} samples) to {original_eval_path}"
+        f"Saved original style eval ({len(original_eval_ds)} samples)"
+        f" to {original_eval_path}"
     )
 
     return original_eval_path
@@ -2571,7 +2616,7 @@ def create_pirate_style_eval(
     if isinstance(eval_ds, DatasetDict):
         eval_ds = eval_ds["train"]
 
-    eval_facts = set(eval_ds["fact"])
+    eval_facts = set(eval_ds["fact"])  # type: ignore[index]
 
     # Load pirate dataset
     pirate_ds = load_from_disk("data/facts_dataset_pirate-Qwen3-8B-Base.hf")
@@ -2582,16 +2627,16 @@ def create_pirate_style_eval(
     original = load_from_disk("data/facts_dataset.hf")
     if isinstance(original, DatasetDict):
         original = original["train"]
-    fact_to_meta = {row["fact"]: row for row in original}
+    fact_to_meta = {row["fact"]: row for row in original}  # type: ignore[index]
 
     for col in original.column_names:
         if col not in pirate_ds.column_names:
-            restored_col = [fact_to_meta[row["fact"]][col] for row in pirate_ds]
+            restored_col = [fact_to_meta[row["fact"]][col] for row in pirate_ds]  # type: ignore[index]
             pirate_ds = pirate_ds.add_column(col, restored_col)
 
     # Select only the exclusive facts (same facts as in minority eval)
     pirate_eval_indices = [
-        i for i, row in enumerate(pirate_ds) if row["fact"] in eval_facts
+        i for i, row in enumerate(pirate_ds) if row["fact"] in eval_facts  # type: ignore[index]
     ]
     pirate_eval_ds = pirate_ds.select(pirate_eval_indices)
 
@@ -2679,7 +2724,8 @@ def score_summed_rewrites(
 
     n_eval = len(shakespeare_eval_ds)
     print(
-        f"Scoring {n_eval} summed rewrite queries (shakespeare + pirate) against {n_train} train"
+        f"Scoring {n_eval} summed rewrite queries (shakespeare + pirate)"
+        f" against {n_train} train"
     )
 
     # Build fact-to-index mapping for alignment
@@ -3010,7 +3056,8 @@ def compute_rewrite_ablation_metrics(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        strategy: One of "original", "summed_rewrites", "shakespeare_only", "pirate_only".
+        strategy: One of "original", "summed_rewrites",
+            "shakespeare_only", "pirate_only".
         preconditioner_name: Name of preconditioner subdirectory (None for no precond).
 
     Returns:
@@ -3048,12 +3095,12 @@ def compute_rewrite_ablation_metrics(
     n_eval = len(eval_ds)
 
     # Extract metadata
-    train_styles = train_ds["style"]
-    train_identifiers = train_ds["identifier"]
-    train_fields = train_ds["field"]
+    train_styles = train_ds["style"]  # type: ignore[index]
+    train_identifiers = train_ds["identifier"]  # type: ignore[index]
+    train_fields = train_ds["field"]  # type: ignore[index]
 
-    eval_identifiers = eval_ds["identifier"]
-    eval_fields = eval_ds["field"]
+    eval_identifiers = eval_ds["identifier"]  # type: ignore[index]
+    eval_fields = eval_ds["field"]  # type: ignore[index]
 
     # Get top-k indices for each query
     top_k = 10
@@ -3340,7 +3387,8 @@ def run_rewrite_ablation_experiment(
 
     for name, m in all_metrics.items():
         print(
-            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
+            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} "
+            f"{m.top1_style_leakage:<17.2%}"
         )
 
     return all_metrics

@@ -153,8 +153,8 @@ class TrainingConfig(BaseModel):
 
 
 class NoShuffleSFTTrainer(SFTTrainer):
-    def _get_train_sampler(self, dataset):  # <-- Add 'dataset' parameter
-        sampler = SequentialSampler(dataset)
+    def _get_train_sampler(self, train_dataset):  # type: ignore[override]
+        sampler = SequentialSampler(train_dataset)  # type: ignore[arg-type]
 
         return sampler
 
@@ -210,7 +210,7 @@ def train(training_cfg: TrainingConfig, dataset: Dataset):
             ddp_find_unused_parameters=False,
             fp16=True,
             gradient_accumulation_steps=training_cfg.gradient_accumulation_steps,
-            learning_rate=training_cfg.learning_rate,
+            learning_rate=float(training_cfg.learning_rate),
             logging_steps=1,
             lr_scheduler_type=training_cfg.lr_scheduler_type,
             max_length=training_cfg.max_seq_length,
@@ -304,6 +304,8 @@ def main():
             ),
         )
     )
+    if not isinstance(dataset, Dataset):
+        raise TypeError(f"Expected Dataset, got {type(dataset)}")
     train(training_config, dataset)
 
 

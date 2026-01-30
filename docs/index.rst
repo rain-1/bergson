@@ -52,6 +52,14 @@ API Reference
 
    api
 
+Experiments
+-----------
+
+.. toctree::
+   :maxdepth: 2
+
+   experiments
+
 
 Content Index
 ------------------

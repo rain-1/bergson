@@ -1,6 +1,7 @@
 """Dataset creation and rewording utilities for semantic experiments."""
 
 from pathlib import Path
+from typing import Any, cast
 
 import torch
 from datasets import (
@@ -27,8 +28,10 @@ def load_experiment_data(
     """Load experiment data from HuggingFace or local disk.
 
     Args:
-        base_path: Local path containing data/*.hf directories. Required if hf_repo is None.
-        hf_repo: HuggingFace dataset repo ID (e.g., "EleutherAI/bergson-asymmetric-style").
+        base_path: Local path containing data/*.hf directories.
+            Required if hf_repo is None.
+        hf_repo: HuggingFace dataset repo ID
+            (e.g., "EleutherAI/bergson-asymmetric-style").
             If provided, downloads from HF and ignores base_path.
         splits: Optional list of splits to load. If None, loads all available splits.
 
@@ -46,11 +49,13 @@ def load_experiment_data(
         data = load_experiment_data(hf_repo="...", splits=["train", "eval"])
     """
     if hf_repo:
-        dataset_dict = load_dataset(hf_repo)
+        loaded = load_dataset(hf_repo)
+        if not isinstance(loaded, DatasetDict):
+            raise TypeError(f"Expected DatasetDict from HF, got {type(loaded)}")
+        dataset_dict: DatasetDict = loaded
         if splits:
-            dataset_dict = DatasetDict(
-                {k: dataset_dict[k] for k in splits if k in dataset_dict}
-            )
+            filtered = {k: dataset_dict[k] for k in splits if k in dataset_dict}
+            dataset_dict = DatasetDict(cast(Any, filtered))
         return dataset_dict
 
     if base_path is None:
@@ -71,12 +76,13 @@ def load_experiment_data(
     if not available_splits:
         raise FileNotFoundError(f"No .hf datasets found in {data_path}")
 
-    return DatasetDict(
-        {
-            split: load_from_disk(str(data_path / f"{split}.hf"))
-            for split in available_splits
-        }
-    )
+    result: dict[str, Dataset] = {}
+    for split in available_splits:
+        ds = load_from_disk(str(data_path / f"{split}.hf"))
+        if isinstance(ds, DatasetDict):
+            ds = ds["train"]
+        result[split] = ds
+    return DatasetDict(cast(Any, result))
 
 
 def reword(
@@ -119,7 +125,7 @@ def reword(
     for i in tqdm(range(0, len(data_list), batch_size)):
         # 1. Prepare the batch
         batch_items = data_list[i : i + batch_size]
-        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]
+        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]  # type: ignore[index]
 
         # 2. Tokenize (Batch mode)
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
@@ -148,7 +154,7 @@ def reword(
 
         # 6. Store results
         for item, output_text in zip(batch_items, decoded_batch):
-            new_facts.append(item["fact"])
+            new_facts.append(item["fact"])  # type: ignore[index]
             new_reworded.append(output_text.strip())
 
     # Reconstruct dataset
@@ -184,8 +190,10 @@ def create_data() -> None:
         pirate_path = f"data/facts_dataset_pirate-{model_short}.hf"
         if not Path(pirate_path).exists():
             prompt_pirate = (
-                "Reword the following fact like it's coming from a pirate. Be creative!\n"
-                "Do not include any other text in your response, just the contents of the "
+                "Reword the following fact like it's coming from a pirate. "
+                "Be creative!\n"
+                "Do not include any other text in your response, "
+                "just the contents of the "
                 "reworded fact.\n"
                 "Fact: {fact}\n"
                 "Your rewrite:"
@@ -227,8 +235,8 @@ def create_qwen_only_dataset() -> Path:
         # Add back any dropped columns from original
         for col in original.column_names:
             if col not in ds.column_names:
-                orig_map = {row["fact"]: row for row in original}
-                restored_col = [orig_map[row["fact"]][col] for row in ds]
+                orig_map = {row["fact"]: row for row in original}  # type: ignore[index]
+                restored_col = [orig_map[row["fact"]][col] for row in ds]  # type: ignore[index]
                 ds = ds.add_column(col, restored_col)
 
         merged_datasets.append(ds)

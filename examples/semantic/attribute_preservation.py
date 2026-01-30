@@ -237,7 +237,8 @@ class AttributePreservationConfig:
         default_factory=lambda: {
             "scientist": "shakespeare",  # Scientists in Shakespeare style
             "business": "pirate",  # Business in Pirate style
-            "creative": "shakespeare",  # Creative in Shakespeare style (same as scientist)
+            # Creative in Shakespeare style (same as scientist)
+            "creative": "shakespeare",
         }
     )
 
@@ -413,14 +414,17 @@ def reword_dataset_with_style(
 
     style_prompts = {
         "shakespeare": (
-            "Reword the following fact in a Shakespearean style, adding flair and poetry.\n"
-            "Do not include other text in your response, just the contents of the reworded fact.\n"
+            "Reword the following fact in a Shakespearean style, adding flair"
+            " and poetry.\n"
+            "Do not include other text in your response, just the contents of "
+            "the reworded fact.\n"
             "Fact: {fact}\n"
             "Your rewrite:"
         ),
         "pirate": (
             "Reword the following fact like it's coming from a pirate. Be creative!\n"
-            "Do not include any other text in your response, just the contents of the reworded fact.\n"
+            "Do not include any other text in your response, just the contents of "
+            "the reworded fact.\n"
             "Fact: {fact}\n"
             "Your rewrite:"
         ),
@@ -449,7 +453,7 @@ def reword_dataset_with_style(
 
     for i in tqdm(range(0, len(data_list), batch_size)):
         batch_items = data_list[i : i + batch_size]
-        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]
+        prompts = [prompt_template.format(fact=item["fact"]) for item in batch_items]  # type: ignore[index]
 
         inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
         input_len = inputs.input_ids.shape[1]
@@ -470,7 +474,7 @@ def reword_dataset_with_style(
         )
 
         for item, output_text in zip(batch_items, decoded_batch):
-            new_facts.append(item["fact"])
+            new_facts.append(item["fact"])  # type: ignore[index]
             new_reworded.append(output_text.strip())
 
     # Build new dataset with all original columns plus 'reworded'
@@ -502,7 +506,7 @@ def create_styled_datasets(
 
     if train_path.exists() and eval_path.exists():
         print(f"Loading cached styled datasets from {output_dir}")
-        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))
+        return load_from_disk(str(train_path)), load_from_disk(str(eval_path))  # type: ignore[index]
 
     # Get base facts
     base_train, base_eval = create_attribute_dataset(config, output_dir)
@@ -552,7 +556,7 @@ def create_styled_datasets(
     print(f"  Train: {len(styled_train)} samples")
     print(f"  Eval: {len(styled_eval)} samples")
 
-    return styled_train, styled_eval
+    return styled_train, styled_eval  # type: ignore[index]
 
 
 def create_attribute_index(
@@ -950,7 +954,7 @@ def compute_attribute_metrics(
 
         # Attribute-level matching (for top-1)
         top1_idx = top_k_idx[0]
-        top1_occ = train_occupations[top1_idx]
+        # top1_occ = train_occupations[top1_idx]
         top1_field = train_fields[top1_idx]
         top1_value = train_values[top1_idx]
 
@@ -1022,8 +1026,8 @@ def print_attribute_metrics(metrics: AttributePreservationMetrics, name: str) ->
     print(f"  Top-10: {metrics.top10_style_only_match:.2%}")
 
     print("\nPer-Field Top-1 Accuracy:")
-    for field, acc in sorted(metrics.top1_by_field.items()):
-        print(f"  {field}: {acc:.2%}")
+    for field_name, acc in sorted(metrics.top1_by_field.items()):
+        print(f"  {field_name}: {acc:.2%}")
 
 
 def compute_style_preconditioner_from_data(
@@ -1640,7 +1644,8 @@ def run_attribute_preservation_experiment(
     for occ, style in config.style_occupation_map.items():
         print(f"    {occ}: {style}")
     print(
-        f"  Eval occupation: {config.eval_occupation} (queried in {config.eval_style} style)"
+        f"  Eval occupation: {config.eval_occupation} "
+        f"(queried in {config.eval_style} style)"
     )
     print(f"  People per occupation: {config.people_per_occupation}")
 
@@ -1705,7 +1710,8 @@ def run_attribute_preservation_experiment(
     print("=" * 70)
 
     print(
-        f"\n{'Strategy':<25} {'Fact Acc':<12} {'Occ Acc':<12} {'Style Only':<12} {'Trade-off':<12}"
+        f"\n{'Strategy':<25} {'Fact Acc':<12} {'Occ Acc':<12} "
+        f"{'Style Only':<12} {'Trade-off':<12}"
     )
     print("-" * 73)
 
@@ -1714,21 +1720,25 @@ def run_attribute_preservation_experiment(
         # A good trade-off is when occ_acc is high and style_only is low
         trade_off = m.top1_occupation_accuracy - m.top1_style_only_match
         print(
-            f"{name:<25} {m.top1_fact_accuracy:<12.2%} {m.top1_occupation_accuracy:<12.2%} "
+            f"{name:<25} {m.top1_fact_accuracy:<12.2%} "
+            f"{m.top1_occupation_accuracy:<12.2%} "
             f"{m.top1_style_only_match:<12.2%} {trade_off:<12.2%}"
         )
 
     print("\nInterpretation:")
     print("  - Fact Accuracy: How well we match exact facts (semantic matching)")
     print(
-        "  - Occupation Accuracy: How well we match occupation cluster (attribute preservation)"
+        "  - Occupation Accuracy: How well we match occupation cluster "
+        "(attribute preservation)"
     )
     print(
-        "  - Style Only: Matches where style matches but occupation doesn't (should be LOW)"
+        "  - Style Only: Matches where style matches but occupation doesn't "
+        "(should be LOW)"
     )
     print("  - Trade-off: Occ Acc - Style Only (higher is better)")
     print(
-        "  - majority_no_precond: Control showing baseline when eval style matches training"
+        "  - majority_no_precond: Control showing baseline when eval "
+        "style matches training"
     )
 
     baseline = all_metrics.get("no_precond")
@@ -1769,9 +1779,16 @@ def run_attribute_preservation_experiment(
         print(f"  Occupation Accuracy: {majority.top1_occupation_accuracy:.2%}")
 
     if baseline and r_between:
+        style_reduction = (
+            baseline.top1_style_only_match - r_between.top1_style_only_match
+        )
+        occ_change = (
+            r_between.top1_occupation_accuracy - baseline.top1_occupation_accuracy
+        )
         if style_reduction > 0 and occ_change >= -0.05:
             print(
-                "\n✓ SUCCESS: Style suppression works without damaging attribute preservation!"
+                "\n✓ SUCCESS: Style suppression works without "
+                "damaging attribute preservation!"
             )
         elif style_reduction > 0 and occ_change < -0.05:
             print("\n⚠ PARTIAL: Style suppressed but attribute preservation damaged")

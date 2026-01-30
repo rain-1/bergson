@@ -32,7 +32,8 @@ def _load_gradients_as_float(grads: np.memmap, name: str) -> np.ndarray:
 
 
 def build_style_indices(analysis_model: str = "tmp/checkpoint-282") -> None:
-    """Build separate indices for pirate and shakespeare to get separate preconditioners.
+    """Build separate indices for pirate and shakespeare to
+    get separate preconditioners.
 
     Args:
         analysis_model: Model to use for gradient collection.
@@ -187,7 +188,8 @@ def compute_between_preconditioner_means(
     shakespeare_index_path: Path | str,
     output_path: Path | str,
 ) -> GradientProcessor:
-    """Compute R_between = (mu_pirate - mu_shakespeare)(mu_pirate - mu_shakespeare)^T per module.
+    """Compute R_between =
+        (mu_pirate - mu_shakespeare)(mu_pirate - mu_shakespeare)^T per module.
 
     This creates a rank-1 preconditioner from the difference in class means.
     More targeted than the covariance method - captures exactly the "style direction".
@@ -368,8 +370,8 @@ def compute_summed_loss_preconditioner(
         shakespeare_ds = shakespeare_ds["train"]
 
     # Build fact -> index mapping
-    pirate_facts = pirate_ds["fact"]
-    shakespeare_facts = shakespeare_ds["fact"]
+    pirate_facts = pirate_ds["fact"]  # type: ignore[index]
+    shakespeare_facts = shakespeare_ds["fact"]  # type: ignore[index]
 
     pirate_fact_to_idx = {f: i for i, f in enumerate(pirate_facts)}
     shakespeare_fact_to_idx = {f: i for i, f in enumerate(shakespeare_facts)}
@@ -472,8 +474,8 @@ def compute_pca_style_subspace(
         shakespeare_ds = shakespeare_ds["train"]
 
     # Build fact -> index mapping
-    pirate_facts = pirate_ds["fact"]
-    shakespeare_facts = shakespeare_ds["fact"]
+    pirate_facts = pirate_ds["fact"]  # type: ignore[index]
+    shakespeare_facts = shakespeare_ds["fact"]  # type: ignore[index]
 
     pirate_fact_to_idx = {f: i for i, f in enumerate(pirate_facts)}
     shakespeare_fact_to_idx = {f: i for i, f in enumerate(shakespeare_facts)}
@@ -597,7 +599,8 @@ def compute_eval_preconditioner(
     Args:
         eval_grads_path: Path to eval gradients index.
         output_path: Path to save the preconditioner.
-        reference_proc_path: Path to a reference processor for module names (if eval has none).
+        reference_proc_path: Path to a reference processor
+        for module names (if eval has none).
 
     Returns:
         The computed GradientProcessor.
@@ -624,7 +627,8 @@ def compute_eval_preconditioner(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load a reference processor to get metadata (use reference if eval doesn't have precs)
+    # Load a reference processor to get metadata
+    # (use reference if eval doesn't have precs)
     if reference_proc_path:
         base_proc = GradientProcessor.load(Path(reference_proc_path))
     else:
@@ -684,7 +688,8 @@ def compute_train_eval_mixed_preconditioner(
         return GradientProcessor.load(output_path)
 
     print(
-        f"Computing train-eval mixed preconditioner ({train_weight:.0%} train, {1-train_weight:.0%} eval)..."
+        f"Computing train-eval mixed preconditioner ({train_weight:.0%} "
+        f"train, {1-train_weight:.0%} eval)..."
     )
 
     train_path = Path(train_index_path)
