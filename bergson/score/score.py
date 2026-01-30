@@ -227,9 +227,15 @@ def get_query_ds(score_cfg: ScoreConfig):
     sizes = torch.tensor(list(grad_sizes.values()))
     module_offsets = torch.tensor([0] + torch.cumsum(sizes, dim=0).tolist())
 
+    # Cast to float32 only for dtypes not natively supported by numpy (e.g. bfloat16)
+    needs_cast = not np.issubdtype(mmap.dtype, np.floating)
     query_ds = Dataset.from_dict(
         {
-            name: mmap[:, module_offsets[i] : module_offsets[i + 1]].astype(np.float32)
+            name: (
+                mmap[:, module_offsets[i] : module_offsets[i + 1]].astype(np.float32)
+                if needs_cast
+                else mmap[:, module_offsets[i] : module_offsets[i + 1]]
+            )
             for i, name in enumerate(grad_sizes.keys())
             if name in target_modules
         }
