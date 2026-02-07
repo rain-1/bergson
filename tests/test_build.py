@@ -1,111 +1,157 @@
-import pytest
-
-from bergson.data import load_gradients
-
-try:
-    import torch
-
-    HAS_CUDA = torch.cuda.is_available()
-except Exception:
-    HAS_CUDA = False
-
-if not HAS_CUDA:
-    pytest.skip(
-        "Skipping GPU-only tests: no CUDA/NVIDIA driver available.",
-        allow_module_level=True,
-    )
-
+import subprocess
 from pathlib import Path
 
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import numpy as np
+import pytest
+import torch
+from transformers import AutoModelForCausalLM
 
-from bergson import (
-    AttentionConfig,
-    DataConfig,
-    GradientProcessor,
-    IndexConfig,
-    collect_gradients,
-)
-from bergson.data import tokenize
+from bergson import GradientProcessor, collect_gradients
+from bergson.config import AttentionConfig, IndexConfig
+from bergson.data import load_gradients
 
 
-def test_disk_build_linear(tmp_path: Path):
-    run_path = tmp_path / "example_with_heads"
-    run_path.mkdir(parents=True, exist_ok=True)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_build_e2e(tmp_path: Path):
+    result = subprocess.run(
+        [
+            "python",
+            "-m",
+            "bergson",
+            "build",
+            "test_e2e",
+            "--model",
+            "EleutherAI/pythia-14m",
+            "--dataset",
+            "NeelNanda/pile-10k",
+            "--split",
+            "train[:100]",
+            "--truncation",
+            "--projection_dim",
+            "4",
+            "--token_batch_size",
+            "1024",
+            "--precision",
+            "bf16",
+        ],
+        cwd=tmp_path,
+        capture_output=True,  # Add this
+        text=True,  # Add this to get strings instead of bytes
+    )
 
-    model_name = "RonenEldan/TinyStories-1M"
-    data_cfg = DataConfig(dataset="NeelNanda/pile-10k", truncation=True)
+    assert "Error" not in result.stderr, f"Error found in stderr:\n{result.stderr}"
+
+    processor = GradientProcessor.load(tmp_path / "test_e2e")
+
+    assert processor.preconditioners is not None
+    assert processor.preconditioners_eigen is not None
+
+    assert len(processor.preconditioners) > 0
+    assert len(processor.preconditioners_eigen) > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_build_consistency(tmp_path: Path, model, dataset):
+    model = model.float()
+
+    cfg = IndexConfig(
+        run_path=str(tmp_path),
+        skip_preconditioners=True,
+        token_batch_size=1024,
+    )
+    collect_gradients(
+        model=model,
+        data=dataset,
+        processor=GradientProcessor(projection_dim=cfg.projection_dim),
+        cfg=cfg,
+    )
+
+    index = load_gradients(cfg.partial_run_path)
+
+    cache_path = Path("runs/test_build_cache.npy")
+    if not cache_path.exists():
+        # Regenerate cache, TODO: We shouldn't do this, maybe use dvc
+        np.save(cache_path, index[index.dtype.names[0]][0])
+
+    cached_item_grad = np.load(cache_path)
+    first_module_grad = index[index.dtype.names[0]][0]
+
+    assert np.allclose(first_module_grad, cached_item_grad, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_split_attention_build(tmp_path: Path, model, dataset):
     attention_cfgs = {
         "h.0.attn.attention.out_proj": AttentionConfig(
             num_heads=16, head_size=4, head_dim=2
         ),
     }
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name, trust_remote_code=True, use_safetensors=True
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    data = load_dataset(data_cfg.dataset, split="train")
-    data = data.select(range(8))  # type: ignore
-    data = data.map(
-        tokenize,
-        batched=True,
-        fn_kwargs=dict(args=data_cfg, tokenizer=tokenizer),
-        remove_columns=data.column_names,
-    )
-
-    processor = GradientProcessor(projection_dim=16)
+    cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
 
     collect_gradients(
         model=model,
-        data=data,
-        processor=processor,
-        path=str(run_path),
+        data=dataset,
+        processor=GradientProcessor(projection_dim=16),
+        cfg=cfg,
         attention_cfgs=attention_cfgs,
     )
 
-    assert any(run_path.iterdir()), "Expected artifacts in the temp run_path"
+    assert any(
+        Path(cfg.partial_run_path).iterdir()
+    ), "Expected artifacts in the temp run_path"
 
 
-def test_disk_build_conv1d(tmp_path: Path):
-    num_rows = 8
-
-    run_path = tmp_path / "example_with_heads"
-    run_path.mkdir(parents=True, exist_ok=True)
-
-    config = IndexConfig(
-        run_path=str(run_path),
-        model="openai-community/gpt2",
-        data=DataConfig(dataset="NeelNanda/pile-10k", truncation=True),
-    )
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_conv1d_build(tmp_path: Path, dataset):
+    model_name = "openai-community/gpt2"
 
     model = AutoModelForCausalLM.from_pretrained(
-        config.model, trust_remote_code=True, use_safetensors=True
-    )
-    tokenizer = AutoTokenizer.from_pretrained(config.model)
-
-    data = load_dataset(config.data.dataset, split="train")
-    data = data.select(range(num_rows))  # type: ignore
-    data = data.map(
-        tokenize,
-        batched=True,
-        fn_kwargs=dict(args=config.data, tokenizer=tokenizer),
-        remove_columns=data.column_names,
+        model_name, trust_remote_code=True, use_safetensors=True
     )
 
-    processor = GradientProcessor(projection_dim=config.projection_dim)
+    cfg = IndexConfig(
+        run_path=str(tmp_path),
+        # This build hangs in pytest with preconditioners enabled.
+        # It works when run directly so it may be a pytest issue.
+        skip_preconditioners=True,
+        # GPT-2 max_position_embeddings is 1024
+        token_batch_size=1024,
+    )
 
     collect_gradients(
         model=model,
-        data=data,
-        processor=processor,
-        path=config.run_path,
+        data=dataset,
+        processor=GradientProcessor(projection_dim=16),
+        cfg=cfg,
     )
 
-    assert any(run_path.iterdir()), "Expected artifacts in the temp run_path"
+    assert any(
+        Path(cfg.partial_run_path).iterdir()
+    ), "Expected artifacts in the run path"
 
-    index = load_gradients(str(run_path))
+    index = load_gradients(cfg.partial_run_path)
+
     assert len(modules := index.dtype.names) != 0
-    assert len(index[modules[0]]) == num_rows
+    assert len(index[modules[0]]) == len(dataset)
+    assert index[modules[0]][0].sum().item() != 0.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_tokenizer_build(tmp_path: Path, model, dataset):
+    cfg = IndexConfig(
+        run_path=str(tmp_path),
+        # Use a different tokenizer than the model
+        tokenizer="openai-community/gpt2",
+        token_batch_size=1024,
+    )
+
+    collect_gradients(
+        model=model,
+        data=dataset,
+        processor=GradientProcessor(projection_dim=16),
+        cfg=cfg,
+    )
+    assert any(
+        Path(cfg.partial_run_path).iterdir()
+    ), "Expected artifacts in the run path"

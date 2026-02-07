@@ -1,57 +1,122 @@
-import os
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Union
 
 from simple_parsing import ArgumentParser, ConflictResolution
 
-from .build import build_gradient_dataset
-from .data import IndexConfig, QueryConfig
-from .query import query_gradient_dataset
+from .build import build
+from .config import HessianConfig, IndexConfig, QueryConfig, ReduceConfig, ScoreConfig
+from .hessians.hessian_approximations import approximate_hessians
+from .query.query_index import query
+from .reduce import reduce
+from .score.score import score_dataset
+
+
+def validate_run_path(index_cfg: IndexConfig):
+    """Validate the run path."""
+    if index_cfg.distributed.rank != 0:
+        return
+
+    for path in [Path(index_cfg.run_path), Path(index_cfg.partial_run_path)]:
+        if not path.exists():
+            continue
+
+        if index_cfg.overwrite:
+            shutil.rmtree(path)
+        else:
+            raise FileExistsError(
+                f"Run path {path} already exists. Use --overwrite to overwrite it."
+            )
 
 
 @dataclass
 class Build:
-    """Build the gradient dataset."""
-
-    cfg: IndexConfig
-
-    def execute(self):
-        """Build the gradient dataset."""
-        if not self.cfg.save_index and not self.cfg.save_processor:
-            raise ValueError(
-                "At least one of save_index or save_processor must be True"
-            )
-
-        build_gradient_dataset(self.cfg)
-
-
-@dataclass
-class Query:
-    """Query the gradient dataset."""
-
-    query_cfg: QueryConfig
+    """Build a gradient index."""
 
     index_cfg: IndexConfig
 
     def execute(self):
-        """Query the gradient dataset."""
+        """Build the gradient index."""
+        if self.index_cfg.skip_index and self.index_cfg.skip_preconditioners:
+            raise ValueError("Either skip_index or skip_preconditioners must be False")
 
-        if os.path.exists(self.index_cfg.run_path) and self.index_cfg.save_index:
-            raise ValueError(
-                "Index path already exists and save_index is True - "
-                "running this query will overwrite the existing gradients. "
-                "If you meant to query the existing gradients, use "
-                "Attributor instead."
+        validate_run_path(self.index_cfg)
+
+        build(self.index_cfg)
+
+
+@dataclass
+class Reduce:
+    """Reduce a gradient index."""
+
+    index_cfg: IndexConfig
+
+    reduce_cfg: ReduceConfig
+
+    def execute(self):
+        """Reduce a gradient index."""
+        if self.index_cfg.projection_dim != 0:
+            print(
+                f"Using a projection dimension of " f"{self.index_cfg.projection_dim}. "
             )
 
-        query_gradient_dataset(self.query_cfg, self.index_cfg)
+        validate_run_path(self.index_cfg)
+
+        reduce(self.index_cfg, self.reduce_cfg)
+
+
+@dataclass
+class Score:
+    """Score a dataset against an existing gradient index."""
+
+    score_cfg: ScoreConfig
+
+    index_cfg: IndexConfig
+
+    def execute(self):
+        """Score a dataset against an existing gradient index."""
+        assert self.score_cfg.query_path
+
+        if self.index_cfg.projection_dim != 0:
+            print(
+                f"Using a projection dimension of " f"{self.index_cfg.projection_dim}. "
+            )
+
+        validate_run_path(self.index_cfg)
+
+        score_dataset(self.index_cfg, self.score_cfg)
+
+
+@dataclass
+class Query:
+    """Query an existing gradient index."""
+
+    query_cfg: QueryConfig
+
+    def execute(self):
+        """Query an existing gradient index."""
+        query(self.query_cfg)
+
+
+@dataclass
+class Hessian:
+    """Approximate Hessian matrices using KFAC or EKFAC."""
+
+    hessian_cfg: HessianConfig
+    index_cfg: IndexConfig
+
+    def execute(self):
+        """Compute Hessian approximation."""
+        validate_run_path(self.index_cfg)
+        approximate_hessians(self.index_cfg, self.hessian_cfg)
 
 
 @dataclass
 class Main:
     """Routes to the subcommands."""
 
-    command: Union[Build, Query]
+    command: Union[Build, Query, Reduce, Score, Hessian]
 
     def execute(self):
         """Run the script."""
@@ -59,6 +124,7 @@ class Main:
 
 
 def main(args: Optional[list[str]] = None):
+    """Parse CLI arguments and dispatch to the selected subcommand."""
     parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
     parser.add_arguments(Main, dest="prog")
     prog: Main = parser.parse_args(args=args).prog

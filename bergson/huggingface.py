@@ -2,13 +2,13 @@ import math
 import os
 from functools import wraps
 from itertools import chain
+from pathlib import Path
 from typing import Sized
 
 import numpy as np
 import torch
 import torch.distributed as dist
 from datasets import Dataset
-from numpy.typing import DTypeLike
 from peft import PeftModel
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -16,10 +16,12 @@ from transformers.trainer import Trainer
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
 
-from bergson import AttentionConfig, GradientCollector, GradientProcessor
+from bergson import AttentionConfig, GradientProcessor
+from bergson.collector.gradient_collectors import StreamingGradientCollector
 from bergson.data import create_index
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer
-from bergson.peft import detect_peft_modules
+from bergson.utils.peft import detect_peft_modules
+from bergson.utils.utils import convert_dtype_to_torch
 
 
 class GradientCollectorCallback(TrainerCallback):
@@ -28,11 +30,11 @@ class GradientCollectorCallback(TrainerCallback):
 
     def __init__(
         self,
-        path: str,
+        path: Path,
         attention_cfgs: dict[str, AttentionConfig] = {},
         projection_dim: int = 16,
         include_bias: bool = False,
-        dtype: DTypeLike = np.float16,
+        dtype: np.dtype = np.dtype(np.float16),
         accumulate_grads: bool = False,
         use_optimizer_state: bool = True,
         track_order: bool = False,
@@ -56,7 +58,7 @@ class GradientCollectorCallback(TrainerCallback):
         super().__init__()
 
         # Initialized in on_train_begin when we learn what the model is
-        self.collector = None
+        self.collector: StreamingGradientCollector
         self.grad_sizes = {}
 
         self.attention_cfgs = attention_cfgs
@@ -75,16 +77,14 @@ class GradientCollectorCallback(TrainerCallback):
         self.mod_grads = {}
         self.batch_indices: Tensor | None = None
 
-        # TODO: Handle this more elegantly
-        self.torch_dtype = torch.float32 if self.dtype == np.float32 else torch.float16
+        self.torch_dtype = convert_dtype_to_torch(self.dtype)
 
     def write_grads(self, grad_buffer: np.memmap):
-        # Ensure the nonblocking copies are all finished
         torch.cuda.synchronize()
-        for layer_name, g in self.mod_grads.items():
+        for layer_name, g in self.collector.mod_grads.items():
             grad_buffer[layer_name][self.batch_indices, :] = g.numpy()
 
-        self.mod_grads.clear()
+        self.collector.mod_grads.clear()
 
     def on_train_begin(
         self,
@@ -108,9 +108,8 @@ class GradientCollectorCallback(TrainerCallback):
             reshape_to_square = False
             target_modules = None
 
-        self.collector = GradientCollector(
+        self.collector = StreamingGradientCollector(
             model=getattr(model, "base_model", model),
-            closure=self.on_module_backward,
             processor=GradientProcessor(
                 {},
                 projection_dim=self.projection_dim or None,
@@ -119,6 +118,7 @@ class GradientCollectorCallback(TrainerCallback):
             ),
             target_modules=target_modules,
             attention_cfgs=self.attention_cfgs,
+            dtype=self.torch_dtype,
         )
         self.grad_sizes = {
             name: math.prod(s) for name, s in self.collector.shapes().items()
@@ -153,7 +153,7 @@ class GradientCollectorCallback(TrainerCallback):
             raise ValueError("Dataset must be sized for gradient collection")
 
         self.train_grad_buffer = create_index(
-            os.path.join(self.path, "train" + epoch_suffix),
+            self.path / ("train" + epoch_suffix),
             num_grads=len(ds),
             grad_sizes=self.grad_sizes,
             dtype=self.dtype,
@@ -170,7 +170,7 @@ class GradientCollectorCallback(TrainerCallback):
 
         for dataset_name, dataloader in eval_datasets.items():
             self.eval_grad_buffers[dataset_name] = create_index(
-                os.path.join(self.path, dataset_name + epoch_suffix),
+                self.path / (dataset_name + epoch_suffix),
                 num_grads=len(dataloader),
                 grad_sizes=self.grad_sizes,
                 dtype=self.dtype,
@@ -191,7 +191,7 @@ class GradientCollectorCallback(TrainerCallback):
         if rank == 0:
             epoch = int(state.epoch or 0) - 1
             epoch_suffix = "" if self.accumulate_grads else f"/epoch_{epoch}"
-            path = os.path.join(self.path, "train" + epoch_suffix)
+            path = self.path / ("train" + epoch_suffix)
 
             assert self.collector is not None
             self.collector.processor.save(path)
@@ -238,6 +238,7 @@ class GradientCollectorCallback(TrainerCallback):
         **kwargs,
     ):
         self.on_substep_end(args, state, control)
+        print("Step end")
 
         # Record training order if enabled
         if self.order is not None:
