@@ -1,6 +1,7 @@
 import os
 import socket
 from datetime import timedelta
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -12,16 +13,13 @@ from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_pr
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-from bergson.data import (
-    DataConfig,
-    IndexConfig,
-    load_data_string,
-    tokenize,
-)
+from bergson.config import DataConfig, IndexConfig
+from bergson.data import load_data_string, tokenize
 from bergson.huggingface import (
     GradientCollectorCallback,
     prepare_for_gradient_collection,
 )
+from bergson.utils.utils import assert_type
 
 
 def worker(
@@ -56,7 +54,7 @@ def worker(
     )
 
     callback = GradientCollectorCallback(
-        f"{run_name}/gradients",
+        Path(run_name) / "gradients",
         accumulate_grads=True,
     )
 
@@ -120,13 +118,16 @@ def main(args: IndexConfig):
         conversation_column=args.data.conversation_column,
     )
     dataset = load_data_string(
-        args.data.dataset, args.data.split, streaming=args.streaming
+        args.data.dataset,
+        args.data.split,
+        data_args=args.data.data_args,
     )
     dataset = dataset.map(
         tokenize,
         batched=True,
         fn_kwargs=dict(args=data_config, tokenizer=tokenizer),
     )
+    dataset = assert_type(Dataset, dataset)
 
     train, eval = dataset.train_test_split(
         test_size=0.05,

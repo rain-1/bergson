@@ -18,13 +18,13 @@ from transformers import (
 )
 
 from bergson.distributed import (
-    dist_main,
     grad_tree,
+    launch_distributed_run,
     simple_fsdp,
 )
-from bergson.math import weighted_causal_lm_ce
 from bergson.models import ResNetCIFAR
 from bergson.trainer import DataStream, Trainer
+from bergson.utils.math import weighted_causal_lm_ce
 
 BASE = 1e-4
 WARMUP_STEPS = 30
@@ -187,12 +187,11 @@ def worker(rank: int, world_size: int, dataset):
 def main():
     if MODEL_TYPE == "image":
         ds = load_dataset("cifar10", split="train")
-        dist_main(ds, worker)
     else:
         ds = load_dataset("EleutherAI/SmolLM2-135M-10B", split="train")
         ds = ds.map(lambda x: {"length": len(x["text"])}).sort("length")
 
-    dist_main(ds, worker)
+    launch_distributed_run(MODEL_TYPE, worker, [ds])
 
 
 if __name__ == "__main__":

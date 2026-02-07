@@ -1,21 +1,38 @@
-__version__ = "0.1.1"
+__version__ = "0.5.1"
 
-from .attributor import Attributor
 from .collection import collect_gradients
-from .data import AttentionConfig, DataConfig, IndexConfig, load_gradients
-from .faiss_index import FaissConfig
-from .gradcheck import FiniteDiff
-from .gradients import GradientCollector, GradientProcessor
+from .collector.gradient_collectors import GradientCollector
+from .config import (
+    AttentionConfig,
+    DataConfig,
+    IndexConfig,
+    QueryConfig,
+    ReduceConfig,
+    ScoreConfig,
+)
+from .data import load_gradient_dataset, load_gradients
+from .gradients import GradientProcessor
+from .normalizer.fit_normalizers import fit_normalizers
+from .query.attributor import Attributor
+from .query.faiss_index import FaissConfig
+from .score.scorer import Scorer
+from .utils.gradcheck import FiniteDiff
 
 __all__ = [
     "collect_gradients",
     "load_gradients",
+    "load_gradient_dataset",
+    "fit_normalizers",
     "Attributor",
     "FaissConfig",
     "FiniteDiff",
-    "GradientCollector",
     "GradientProcessor",
+    "GradientCollector",
     "IndexConfig",
     "DataConfig",
     "AttentionConfig",
+    "Scorer",
+    "ScoreConfig",
+    "ReduceConfig",
+    "QueryConfig",
 ]
