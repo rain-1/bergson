@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass, field, fields
 
 import torch
@@ -6,6 +7,7 @@ import torch.distributed as dist
 import torchopt
 from datasets import Dataset
 from torch import nn
+from torchopt.pytree import tree_iter
 from torchopt.typing import GradientTransformation, OptState
 from transformers import BaseImageProcessor
 
@@ -19,6 +21,27 @@ def _maybe_get_cuda_rng_state() -> torch.Tensor:
 
     # This corresponds to a manual seed of 0
     return torch.zeros(16, dtype=torch.uint8)
+
+
+def sorted_checkpoints(folder: str) -> list[tuple[int, str]]:
+    """
+    Return a list of (batch_index, filepath) sorted by batch_index
+    for files named like: step_<index>.ckpt
+    """
+    pattern = re.compile(r"step_(\d+)\.ckpt$")
+
+    checkpoints = []
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+
+        match = pattern.match(name)
+        if match:
+            batch_index = int(match.group(1))
+            checkpoints.append((batch_index, path))
+
+    return sorted(checkpoints, key=lambda x: x[0])
 
 
 class DataStream:
@@ -44,8 +67,13 @@ class DataStream:
         self.input_key = input_key
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+        if self.batch_size % self.world_size != 0:
+            raise ValueError(
+                f"Batch size {self.batch_size} must be divisible by world size "
+                f"{self.world_size}"
+            )
 
-        n = self.batch_size * self.num_batches * self.world_size
+        n = self.batch_size * self.num_batches
         self.weights = nn.Parameter(torch.ones(n, device=device))
 
     @property
@@ -92,12 +120,25 @@ class DataStream:
             yield self[i]
 
 
-@dataclass(frozen=True)
+@dataclass
+class BackwardState:
+    param_grads: dict[str, torch.Tensor]
+
+    opt_grads: list[torch.Tensor]
+    """PyTree of the same structure as the optimizer state, containing gradients for
+    each of the optimizer state tensors."""
+
+    weight_grads: torch.Tensor
+
+
+@dataclass
 class TrainerState:
+    # Differentiable state
     params: dict[str, torch.Tensor]
-    buffers: dict[str, torch.Tensor]
     opt_state: OptState
 
+    # Non-differentiable state
+    buffers: dict[str, torch.Tensor]
     batch_index: int = 0
     cuda_rng_state: torch.Tensor = field(default_factory=_maybe_get_cuda_rng_state)
     cpu_rng_state: torch.Tensor = field(default_factory=torch.random.get_rng_state)
@@ -140,6 +181,49 @@ class TrainerState:
 
         torch.save(state_dict, path)
 
+    @property
+    def requires_grad(self) -> bool:
+        p_val = any(p.requires_grad for p in self.params.values())
+        opt_val = any(
+            isinstance(t, torch.Tensor) and t.requires_grad
+            for t in tree_iter(self.opt_state)
+        )
+        return p_val or opt_val
+
+    @requires_grad.setter
+    def requires_grad(self, value: bool):
+        for p in self.params.values():
+            p.requires_grad = value
+
+        for t in tree_iter(self.opt_state):
+            if isinstance(t, torch.Tensor) and t.is_floating_point():
+                t.requires_grad = value
+
+    def differentiable_tensors(self) -> list[torch.Tensor]:
+        ps = list(self.params.values())
+        os = [
+            t
+            for t in tree_iter(self.opt_state)
+            if isinstance(t, torch.Tensor) and t.is_floating_point()
+        ]
+        return ps + os
+
+    def backward(
+        self,
+        loss: torch.Tensor,
+        weight_grads: torch.Tensor,
+        *,
+        create_graph: bool = False,
+    ) -> BackwardState:
+        """Compute gradient of loss wrt this trainer state."""
+        grads = grad_tree(loss, self.params, create_graph=create_graph)
+        opt_grads = [
+            torch.zeros_like(buf)
+            for buf in tree_iter(self.opt_state)
+            if isinstance(buf, torch.Tensor) and buf.is_floating_point()
+        ]
+        return BackwardState(grads, opt_grads, weight_grads)
+
 
 class Trainer:
     """Stateless, functional trainer for a model, optimizer, and dataset."""
@@ -157,7 +241,7 @@ class Trainer:
         buffers = shallow_copy(dict(model.named_buffers(remove_duplicate=False)))
         opt_state = optimizer.init(params)
 
-        state = TrainerState(params, buffers, opt_state)
+        state = TrainerState(params, opt_state, buffers)
         return cls(model, optimizer), state
 
     def __init__(self, model: nn.Module, optimizer: GradientTransformation):
@@ -201,8 +285,8 @@ class Trainer:
         new_params = torchopt.apply_updates(state.params, updates, inplace=inplace)
         state = TrainerState(
             new_params,
-            state.buffers,
             new_state,
+            state.buffers,
             state.batch_index + 1,
         )
         return state
@@ -213,12 +297,76 @@ class Trainer:
         data: DataStream,
         *,
         inplace: bool = False,
+        save_dir: str | None = None,
         trace: bool = False,
     ) -> TrainerState:
+        # Make sure the save directory exists
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+
         for x in data:
+            # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
+            # any updates, step 1 is the state after the first update, etc.
+            if save_dir is not None:
+                p = os.path.join(save_dir, f"step_{state.batch_index}.ckpt")
+                state.save(p)
+
             state = self.step(state, x, inplace=inplace, trace=trace)
 
         return state
+
+    def backward(
+        self,
+        ckpt_dir: str,
+        data: DataStream,
+        bwd_state: BackwardState,
+    ) -> BackwardState:
+        ckpts = sorted_checkpoints(ckpt_dir)
+
+        for _, path in reversed(ckpts):
+            state_i = TrainerState.load(path)
+            state_i.requires_grad = True
+            data.requires_grad = True
+
+            flat_i = state_i.differentiable_tensors()
+
+            # Re-do the training step
+            state_f = self.step(
+                state_i,
+                data[state_i.batch_index],
+                trace=True,
+            )
+            # Carefully consume the bwd state to save memory
+            flat_f = state_f.differentiable_tensors()
+            p_grads = list(bwd_state.param_grads.values())
+            o_grads = bwd_state.opt_grads
+
+            p_keys = list(bwd_state.param_grads.keys())
+            w_grads = bwd_state.weight_grads
+            del bwd_state
+
+            # grad_outputs is the gradient of the loss wrt the next TrainerState. We're
+            # doing a VJP to get the gradient wrt the current TrainerState, AND the
+            # example weights for this batch.
+            inps = flat_i + [data.weights]
+            result = list(
+                torch.autograd.grad(
+                    flat_f,
+                    inps,
+                    grad_outputs=p_grads + o_grads,
+                    allow_unused=True,
+                )
+            )
+            del p_grads
+
+            # Accumulate parameter gradients
+            param_grads = {k: result[i] for i, k in enumerate(p_keys)}
+            del result[: len(p_keys)]
+
+            weight_grads = result[-1] + w_grads
+            bwd_state = BackwardState(param_grads, result[:-1], weight_grads)
+
+        return bwd_state
 
     def evaluate(self, state: TrainerState, inputs: dict) -> torch.Tensor:
         torch.random.set_rng_state(state.cpu_rng_state)

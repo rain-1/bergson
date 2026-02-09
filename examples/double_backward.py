@@ -11,10 +11,9 @@ from torch.distributed.tensor import (
 )
 from torchopt.typing import Numeric
 from transformers import (
+    AutoModelForCausalLM,
     AutoTokenizer,
     ConvNextImageProcessor,
-    GPTNeoXConfig,
-    GPTNeoXForCausalLM,
 )
 
 from bergson.distributed import (
@@ -27,7 +26,7 @@ from bergson.models import ResNetCIFAR
 from bergson.trainer import DataStream, Trainer
 
 BASE = 1e-4
-WARMUP_STEPS = 30
+WARMUP_STEPS = 0
 MODEL_NAME = "EleutherAI/pythia-14m"
 MODEL_TYPE = "text"
 
@@ -64,7 +63,7 @@ def shuffle_model_parameters(
         flat.copy_(flat[perm])
 
 
-def worker(rank: int, world_size: int, dataset):
+def worker(global_rank: int, rank: int, world_size: int, dataset):
     torch.cuda.set_device(rank)
 
     if MODEL_TYPE == "image":
@@ -76,10 +75,15 @@ def worker(rank: int, world_size: int, dataset):
         )
     else:
         # Initialize the model, optimizer, and trainer
-        cfg = GPTNeoXConfig.from_pretrained(MODEL_NAME)
-        cfg._attn_implementation = "eager"
+        # cfg = GPTNeoXConfig.from_pretrained(MODEL_NAME)
+        # cfg._attn_implementation = "eager"
 
-        model = GPTNeoXForCausalLM(cfg)
+        # model = GPTNeoXForCausalLM(cfg)
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            revision="step0",
+            attn_implementation="eager",
+        )
         model.loss_function = weighted_causal_lm_ce
         model.to(f"cuda:{rank}")
 
@@ -111,32 +115,40 @@ def worker(rank: int, world_size: int, dataset):
 
         return BASE
 
-    opt = torchopt.adamw(schedule, betas=(0.95, 0.975), eps_root=1e-8)
-    # opt = torchopt.sgd(schedule, momentum=0.0)
+    opt = torchopt.adamw(
+        schedule,
+        betas=(0.95, 0.975),
+        eps_root=1e-8,
+        moment_requires_grad=True,
+    )
     trainer, state0 = Trainer.initialize(model, opt)
     state = state0
-    if rank == 0:
-        print(f"{state.params=}")
 
     stream = DataStream(
-        dataset, processor, batch_size=8, num_batches=60, device=f"cuda:{rank}"
+        dataset, processor, batch_size=8, num_batches=50, device=f"cuda:{rank}"
     )
     folder = "/mnt/ssd-1/nora/bergson/checkpoints"
-    os.makedirs(folder, exist_ok=True)
+    state = trainer.train(state, stream, trace=True, save_dir=folder)
 
-    for i, x in enumerate(stream):
-        state = trainer.step(state, x, trace=True)
-        state.save(
-            os.path.join(folder, f"double_backward_step{i}.ckpt"),
-        )
-
-    loss = trainer.evaluate(state, stream[20])
+    loss = trainer.evaluate(state, stream[49])
     grads = grad_tree(loss, {"example_weight": stream.weights})
     scores = grads["example_weight"]
-    if rank == 0:
-        print(f"Scores: {scores}")
+    if world_size > 1:
+        dist.all_reduce(scores)
+    if global_rank == 0:
+        print(f"Scores: {scores.tolist()}")
 
-    # loss = trainer.evaluate(state, stream[20])
+    # Manual checkpointed backward using the saved states
+    loss = trainer.evaluate(state, stream[49])
+    bwd_state = state.backward(loss, torch.zeros_like(stream.weights))
+    stream.requires_grad = True
+
+    bwd_state = trainer.backward(folder, stream, bwd_state)
+    if world_size > 1:
+        dist.all_reduce(bwd_state.weight_grads)
+    if global_rank == 0:
+        print(f"Score diffs: {(bwd_state.weight_grads - scores).tolist()}")
+        print(f"Scores 2: {bwd_state.weight_grads.tolist()}")
 
     # Each rank has only used a fraction of all the example weights. For each rank,
     # weights that it didn't use have zero gradient. We sum across all ranks to get
@@ -145,7 +157,7 @@ def worker(rank: int, world_size: int, dataset):
         dist.all_reduce(scores)
 
     baseline = loss.item()
-    if rank == 0:
+    if global_rank == 0:
         print(f"Baseline: {baseline}")
         print("Grad:", scores.sum())
 
@@ -170,7 +182,7 @@ def worker(rank: int, world_size: int, dataset):
         for x in stream:
             state = trainer.step(state, x)
 
-        loss = trainer.evaluate(state, stream[20])
+        loss = trainer.evaluate(state, stream[49])
         if world_size > 1:
             dist.all_reduce(loss)
 
@@ -178,7 +190,7 @@ def worker(rank: int, world_size: int, dataset):
         score_sums.append(s[subset].sum().item())
 
         corr = spearmanr(diffs, score_sums)
-        if rank == 0:
+        if global_rank == 0:
             print(f"Loss diff: {diffs[-1]}")
             print(f"Score: {score_sums[-1]}")
             print(f"Spearman correlation: {corr}")

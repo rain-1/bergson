@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from bergson.math import weighted_ce
+from bergson.utils.math import weighted_ce
 
 
 class Output(NamedTuple):
