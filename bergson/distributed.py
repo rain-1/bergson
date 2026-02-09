@@ -143,7 +143,7 @@ def simple_fsdp(model: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
-Worker = Callable[[int, int, object], None]
+Worker = Callable[[int, int, int, object], None]
 """A worker function for distributed training."""
 
 
