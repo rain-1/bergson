@@ -115,7 +115,7 @@ def test_conv1d_build(tmp_path: Path, dataset):
         # This build hangs in pytest with preconditioners enabled.
         # It works when run directly so it may be a pytest issue.
         skip_preconditioners=True,
-        # GPT-2 max_position_embeddings is 1024
+        # GPT-2 model_max_length is 1024
         token_batch_size=1024,
     )
 
