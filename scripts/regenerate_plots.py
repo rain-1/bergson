@@ -79,7 +79,7 @@ def _load_cli_records(run_root: Path, num_gpus: int) -> pd.DataFrame:
 
 
 def _extract_gpu_name(hardware: str) -> str:
-    """Extract GPU name from hardware string like 
+    """Extract GPU name from hardware string like
     'nid010546 (4x NVIDIA GH200 120GB)'."""
     if "(" in hardware and ")" in hardware:
         inner = hardware.split("(")[1].split(")")[0]
