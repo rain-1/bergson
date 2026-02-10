@@ -1,15 +1,84 @@
 import gc
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import torch
+import torch.distributed as dist
+from datasets import Dataset, IterableDataset
 from transformers import PreTrainedModel
 
 from bergson.config import IndexConfig
+from bergson.gradients import GradientProcessor
 
 if TYPE_CHECKING:
-    from bergson.collector.gradient_collectors import HookCollectorBase
+    from bergson.collector.gradient_collectors import (
+        HookCollectorBase,
+    )
+
+
+def maybe_auto_batch_size(
+    cfg: IndexConfig,
+    model: PreTrainedModel,
+    ds: Dataset | IterableDataset,
+    processor: GradientProcessor,
+    target_modules: set[str] | None,
+    rank: int = 0,
+) -> None:
+    """Run auto batch size determination if enabled.
+
+    Mutates ``cfg.token_batch_size`` in place. Only rank 0
+    runs the search; other ranks wait at a gloo barrier then
+    read the cached result.
+    """
+    if not cfg.auto_batch_size:
+        return
+
+    from bergson.collector.gradient_collectors import (
+        GradientCollector,
+    )
+
+    # Create gloo group before the search so all ranks
+    # participate in this collective call together.
+    if dist.is_initialized():
+        gloo_group = dist.new_group(backend="gloo")
+    else:
+        gloo_group = None
+
+    if rank == 0:
+        # skip_index=True avoids creating a Builder, whose
+        # create_index() calls dist.barrier() on the default
+        # NCCL group — which would deadlock since only rank 0
+        # creates this collector.
+        probe_cfg = replace(cfg, skip_index=True)
+        cfg.token_batch_size = determine_batch_size(
+            root=Path(".cache"),
+            cfg=cfg,
+            model=model,
+            collector=GradientCollector(
+                model=model.base_model,
+                cfg=probe_cfg,
+                processor=processor,
+                target_modules=target_modules,
+                data=ds,  # type: ignore
+                scorer=None,
+                reduce_cfg=None,
+            ),
+            starting_batch_size=cfg.token_batch_size,
+        )
+
+    if gloo_group is not None:
+        dist.barrier(group=gloo_group)  # type: ignore
+        dist.destroy_process_group(gloo_group)  # type: ignore
+
+        if rank != 0:
+            cache_path = Path(".cache") / "batch_size_cache.jsonl"
+            metadata = _get_system_metadata(cfg)
+            cached = _check_cache(cache_path, metadata)
+            assert cached is not None, "Cache missing after barrier"
+            cfg.token_batch_size = cached
+            print(f"[rank {rank}] Loaded token_batch_size" f" from cache: {cached}")
 
 
 def _clear_cache() -> None:
@@ -143,33 +212,31 @@ def determine_batch_size(
     """
     Finds the largest viable token batch size that fits in memory.
 
-    1. Checks cache.
-    2. Performs binary search for max size.
-    3. Saves to cache.
-    4. Returns optimal size.
+    Uses an exponential search to find bounds, then binary search
+    to refine. Results are cached to a JSONL file.
     """
     cache_path = root / "batch_size_cache.jsonl"
     metadata = _get_system_metadata(cfg)
 
-    # Check Cache
     cached_size = _check_cache(cache_path, metadata)
     if cached_size is not None:
-        print(f"Loaded optimal token_batch_size from cache: {cached_size}")
+        print(f"Loaded token_batch_size from cache: {cached_size}")
         return cached_size
 
     print("Determining optimal batch size...")
 
     # Phase 1: exponential search to find bounds [lo, hi]
-    # where lo fits and hi doesn't.
     lo, hi = None, None
     current_size = starting_batch_size
 
     while current_size >= 16:
         print(f"  Testing {current_size}...", end=" ", flush=True)
         if _try_validate(model, current_size, collector):
+            print("fits")
             lo = current_size
             current_size *= 2
         else:
+            print("OOM")
             hi = current_size
             if lo is not None:
                 break
@@ -184,12 +251,13 @@ def determine_batch_size(
             mid = (lo + hi) // 2
             print(f"  Testing {mid}...", end=" ", flush=True)
             if _try_validate(model, mid, collector):
+                print("fits")
                 lo = mid
             else:
+                print("OOM")
                 hi = mid
 
     print(f"Optimal batch size: {lo}")
-
     _append_to_cache(cache_path, metadata, lo)
 
     return lo
