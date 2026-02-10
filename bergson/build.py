@@ -69,7 +69,7 @@ def build_worker(
     processor = create_processor(model, ds, cfg, target_modules)
 
     # Auto batch size determination if enabled
-    if cfg.autobatchsize:
+    if cfg.auto_batch_size:
         cfg.token_batch_size = determine_batch_size(
             root=Path(".cache"),
             cfg=cfg,
@@ -79,7 +79,7 @@ def build_worker(
                 cfg=cfg,
                 processor=processor,
                 target_modules=target_modules,
-                data=ds,
+                data=ds, # type: ignore
                 scorer=None,
                 reduce_cfg=None,
             ),

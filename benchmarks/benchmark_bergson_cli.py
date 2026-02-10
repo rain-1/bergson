@@ -255,7 +255,7 @@ class Run:
             "--overwrite",
             "--nproc_per_node",
             "1",
-            "--autobatchsize",
+            "--auto_batch_size",
         ]
 
         success, _, err = run_cli_command(query_cmd, "Query index build")

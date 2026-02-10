@@ -88,6 +88,8 @@ def _try_validate(
     """
     _clear_cache()
 
+    # Worst case VRAM usage is with maximally long sequences due to
+    # O(N^2) attention
     max_seq_len = getattr(model.config, "max_position_embeddings", None)
     if max_seq_len is not None and max_seq_len > 0:
         seq_len = min(token_budget, max_seq_len)
@@ -155,42 +157,39 @@ def determine_batch_size(
         print(f"Loaded optimal token_batch_size from cache: {cached_size}")
         return cached_size
 
-    print("Determining optimal batch size via binary search...")
+    print("Determining optimal batch size...")
 
+    # Phase 1: exponential search to find bounds [lo, hi]
+    # where lo fits and hi doesn't.
+    lo, hi = None, None
     current_size = starting_batch_size
-    last_working_size = None
 
-    while True:
-        # Safety break
-        if current_size < 16:
-            if last_working_size is not None:
-                current_size = last_working_size
-                break
-            raise RuntimeError("Could not fit even token_batch_size=16" " in memory.")
-
-        print(
-            f"Testing batch size: {current_size}...",
-            end=" ",
-            flush=True,
-        )
-        is_success = _try_validate(model, current_size, collector)
-
-        if is_success:
-            print("✓ Fits")
-            last_working_size = current_size
-            current_size = current_size * 2
+    while current_size >= 16:
+        print(f"  Testing {current_size}...", end=" ", flush=True)
+        if _try_validate(model, current_size, collector):
+            lo = current_size
+            current_size *= 2
         else:
-            print("✗ OOM / Too Large")
-
-            if last_working_size is not None:
-                current_size = last_working_size
+            hi = current_size
+            if lo is not None:
                 break
+            current_size //= 2
+
+    if lo is None:
+        raise RuntimeError("Could not fit even token_batch_size=16 in memory.")
+
+    # Phase 2: binary search between lo and hi
+    if hi is not None:
+        while hi - lo > max(256, lo // 16):
+            mid = (lo + hi) // 2
+            print(f"  Testing {mid}...", end=" ", flush=True)
+            if _try_validate(model, mid, collector):
+                lo = mid
             else:
-                current_size = current_size // 2
+                hi = mid
 
-    print(f"Largest viable batch size found: {current_size}")
+    print(f"Optimal batch size: {lo}")
 
-    # Save to Cache
-    _append_to_cache(cache_path, metadata, current_size)
+    _append_to_cache(cache_path, metadata, lo)
 
-    return current_size
+    return lo
