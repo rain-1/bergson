@@ -13,6 +13,7 @@ from bergson.collection import collect_gradients
 from bergson.config import IndexConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
+from bergson.utils.auto_batch_size import maybe_auto_batch_size
 from bergson.utils.utils import assert_type, setup_reproducibility
 from bergson.utils.worker_utils import (
     create_processor,
@@ -56,12 +57,14 @@ def build_worker(
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(f"cuda:{local_rank}"),
             rank=rank,
-            timeout=timedelta(minutes=2),
+            timeout=timedelta(minutes=30),
             world_size=world_size,
         )
 
     model, target_modules = setup_model_and_peft(cfg)
     processor = create_processor(model, ds, cfg, target_modules)
+
+    maybe_auto_batch_size(cfg, model, ds, processor, target_modules, rank)
 
     attention_cfgs = {module: cfg.attention for module in cfg.split_attention_modules}
 

@@ -144,6 +144,10 @@ class IndexConfig:
     token_batch_size: int = 2048
     """Batch size in tokens for building the index."""
 
+    auto_batch_size: bool = False
+    """Whether to automatically determine the optimal token batch size.
+    Experimental feature only enabled for `build`."""
+
     processor_path: str = ""
     """Path to a precomputed processor."""
 
