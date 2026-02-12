@@ -1,7 +1,9 @@
 __version__ = "0.5.1"
 
 from .collection import collect_gradients
+from .collector.collector import CollectorComputer
 from .collector.gradient_collectors import GradientCollector
+from .collector.in_memory_collector import InMemoryCollector
 from .config import (
     AttentionConfig,
     DataConfig,
@@ -10,7 +12,14 @@ from .config import (
     ReduceConfig,
     ScoreConfig,
 )
-from .data import load_gradient_dataset, load_gradients
+from .data import (
+    InMemorySequenceBuilder,
+    InMemoryTokenBuilder,
+    TokenGradients,
+    load_gradient_dataset,
+    load_gradients,
+    load_token_gradients,
+)
 from .gradients import GradientProcessor
 from .normalizer.fit_normalizers import fit_normalizers
 from .query.attributor import Attributor
@@ -22,12 +31,18 @@ __all__ = [
     "collect_gradients",
     "load_gradients",
     "load_gradient_dataset",
+    "load_token_gradients",
+    "TokenGradients",
+    "InMemorySequenceBuilder",
+    "InMemoryTokenBuilder",
     "fit_normalizers",
     "Attributor",
     "FaissConfig",
     "FiniteDiff",
     "GradientProcessor",
     "GradientCollector",
+    "InMemoryCollector",
+    "CollectorComputer",
     "IndexConfig",
     "DataConfig",
     "AttentionConfig",

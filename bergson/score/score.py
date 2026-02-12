@@ -14,10 +14,17 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.config import IndexConfig, ScoreConfig
-from bergson.data import allocate_batches, load_gradients
+from bergson.data import (
+    allocate_batches,
+    compute_num_token_grads,
+    load_gradients,
+)
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
-from bergson.score.score_writer import MemmapScoreWriter
+from bergson.score.score_writer import (
+    MemmapSequenceScoreWriter,
+    MemmapTokenScoreWriter,
+)
 from bergson.score.scorer import Scorer
 from bergson.utils.math import compute_damped_inverse
 from bergson.utils.utils import (
@@ -39,10 +46,25 @@ def create_scorer(
     score_cfg: ScoreConfig,
     device: torch.device,
     dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
+    num_token_grads: np.ndarray | None = None,
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
     num_queries = len(query_grads[score_cfg.modules[0]])
-    writer = MemmapScoreWriter(path, num_items, num_queries, dtype=dtype)
+    if attribute_tokens:
+        assert (
+            num_token_grads is not None
+        ), "num_token_grads is required for attribute_tokens"
+        writer = MemmapTokenScoreWriter(
+            path,
+            num_items,
+            num_queries,
+            num_token_grads,
+            dtype=dtype,
+        )
+    else:
+        writer = MemmapSequenceScoreWriter(path, num_items, num_queries, dtype=dtype)
     return Scorer(
         query_grads=query_grads,
         modules=score_cfg.modules,
@@ -51,6 +73,7 @@ def create_scorer(
         dtype=dtype,
         unit_normalize=score_cfg.unit_normalize,
         score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
+        attribute_tokens=attribute_tokens,
     )
 
 
@@ -272,6 +295,11 @@ def score_worker(
     )
     score_device = torch.device(f"cuda:{rank}")
 
+    if index_cfg.attribute_tokens and isinstance(ds, Dataset):
+        num_token_grads = compute_num_token_grads(ds)
+    else:
+        num_token_grads = None
+
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
         kwargs["scorer"] = create_scorer(
@@ -281,6 +309,8 @@ def score_worker(
             score_cfg,
             device=score_device,
             dtype=score_dtype,
+            attribute_tokens=index_cfg.attribute_tokens,
+            num_token_grads=num_token_grads,
         )
 
         collect_gradients(**kwargs)
