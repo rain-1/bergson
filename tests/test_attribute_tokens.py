@@ -8,7 +8,9 @@ import torch
 from datasets import Dataset
 
 from bergson import (
+    CollectorComputer,
     GradientProcessor,
+    InMemoryCollector,
     TokenGradients,
     collect_gradients,
     fit_normalizers,
@@ -447,9 +449,123 @@ def test_token_build_adam_e2e(tmp_path: Path, model, dataset):
     tg = TokenGradients(cfg.partial_run_path)
     assert len(tg) == len(dataset)
 
-    # Each example has 5 tokens, all labels valid → 4 token grads
+    # Each example has 5 tokens, all labels valid -> 4 token grads
     for i in range(len(dataset)):
         assert tg.num_token_grads[i] == 4
         assert tg[i].shape == (4, tg.mmap.shape[1])
-        # Gradients should be non-zero
         assert np.linalg.norm(tg[i].astype(np.float32)) > 0
+
+
+# ---------------------------------------------------------------------------
+# Correctness: sum of token grads == sequence grad (sum reduction)
+# ---------------------------------------------------------------------------
+
+
+def _collect_in_memory(
+    model, dataset, processor, target_modules, attribute_tokens, run_path
+):
+    """Run InMemoryCollector and return the collector for inspection."""
+    cfg = IndexConfig(
+        run_path=run_path,
+        skip_preconditioners=True,
+        token_batch_size=1024,
+        attribute_tokens=attribute_tokens,
+        loss_reduction="sum",
+        skip_index=True,
+    )
+    cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+    collector = InMemoryCollector(
+        model=model.base_model,
+        data=dataset,
+        cfg=cfg,
+        processor=processor,
+        target_modules=target_modules,
+        attention_cfgs={},
+    )
+    computer = CollectorComputer(
+        model=model,
+        data=dataset,
+        collector=collector,
+        cfg=cfg,
+    )
+    computer.run_with_collector_hooks(desc="Collecting")
+    return collector
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.parametrize("normalizer", ["none", "adam", "adafactor"])
+def test_token_sum_equals_sequence(tmp_path, model, dataset, normalizer):
+    """Sum of per-token grads must equal the per-example sequence grad.
+
+    With loss_reduction='sum' the sequence path computes g.mT @ a which
+    is exactly sum_s g_s (x) a_s. Since normalize_() is element-wise, it
+    commutes with the sum, so both paths must agree for all normalizers.
+    """
+    model = model.float()
+    dataset = dataset.repeat(10)
+
+    target_modules = {
+        name
+        for name, module in model.base_model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    }
+
+    # Fit normalizers if needed
+    if normalizer == "none":
+        normalizers = {}
+    else:
+        fit_cfg = IndexConfig(
+            run_path=str(tmp_path / "fit"),
+            skip_preconditioners=True,
+            normalizer=normalizer,
+        )
+        normalizers = fit_normalizers(
+            model,
+            dataset,
+            cfg=fit_cfg,
+            batches=[[idx] for idx in range(len(dataset))],
+            target_modules=target_modules,
+        )
+
+    processor = GradientProcessor(normalizers=normalizers)
+
+    # --- Sequence grads (attribute_tokens=False) ---
+    seq_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=False,
+        run_path=str(tmp_path / "seq"),
+    )
+    # seq_collector.gradients: {module_name: [N, grad_dim]}
+
+    # --- Token grads (attribute_tokens=True) ---
+    tok_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=True,
+        run_path=str(tmp_path / "tok"),
+    )
+    # tok_collector.builder.grad_buffer: [total_tokens, total_grad_dim]
+
+    assert tok_collector.builder is not None
+    offsets = tok_collector.builder.offsets
+
+    # Sum token grads per example and compare to sequence grads
+    for name, seq_grads in seq_collector.gradients.items():
+        tok_grads = tok_collector.gradients[name]  # [total_tokens, grad_dim]
+        for i in range(len(dataset)):
+            start, end = int(offsets[i]), int(offsets[i + 1])
+            tok_sum = tok_grads[start:end].sum(dim=0).float()
+            seq_grad = seq_grads[i].float()
+            torch.testing.assert_close(
+                tok_sum,
+                seq_grad,
+                atol=1e-2,
+                rtol=1e-2,
+                msg=f"Module {name}, example {i}: "
+                f"token sum and sequence grad diverge",
+            )

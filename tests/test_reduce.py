@@ -63,6 +63,7 @@ def test_reduce_cli(tmp_path: Path):
     assert not torch.isnan(grads).any()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_programmatic_reduce(tmp_path: Path):
     index_cfg = IndexConfig(
         run_path=str(tmp_path / "reduction"),
@@ -80,6 +81,7 @@ def test_programmatic_reduce(tmp_path: Path):
     assert len(ds) == 1
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_in_memory_reduce(tmp_path: Path):
     index_cfg = IndexConfig(
         run_path=str(tmp_path / "reduction"),
