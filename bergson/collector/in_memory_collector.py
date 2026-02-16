@@ -85,15 +85,6 @@ class InMemoryCollector(HookCollectorBase):
             assert self.reduce_cfg is None, (
                 "attribute_tokens is incompatible" " with reduce mode."
             )
-            assert all(
-                not isinstance(
-                    self.processor.normalizers.get(name),
-                    AdamNormalizer,
-                )
-                for name in self.shapes().keys()
-            ), (
-                "Adam normalizer is not supported" " with attribute_tokens."
-            )
 
         self.save_dtype = get_gradient_dtype(self.model)
         self.lo = torch.finfo(self.save_dtype).min
@@ -207,12 +198,23 @@ class InMemoryCollector(HookCollectorBase):
         normalizer = self.processor.normalizers.get(name)
 
         if isinstance(normalizer, AdamNormalizer):
-            full_gradient = g.mT @ a
-            P = normalizer.normalize_(full_gradient)
-            if p is not None:
-                g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
-                a_proj = self.projection(name, p, i, "right", g.device, g.dtype).T
-                P = g_proj @ P @ a_proj
+            if self.cfg.attribute_tokens:
+                # Per-position outer product: [N,S,O,1]*[N,S,1,I] → [N,S,O,I]
+                P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                P = normalizer.normalize_(P)  # broadcasts [O,I] over [N,S,O,I]
+                if p is not None:
+                    g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
+                    a_proj = self.projection(name, p, i, "right", g.device, g.dtype).T
+                    P = g_proj @ P @ a_proj  # [N, S, p, q]
+                P = P.flatten(2)  # [N, S, grad_dim]
+                P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+            else:
+                full_gradient = g.mT @ a
+                P = normalizer.normalize_(full_gradient)
+                if p is not None:
+                    g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
+                    a_proj = self.projection(name, p, i, "right", g.device, g.dtype).T
+                    P = g_proj @ P @ a_proj
         else:
             if isinstance(normalizer, AdafactorNormalizer):
                 g_factor = normalizer.row.add(1e-30)

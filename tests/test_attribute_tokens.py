@@ -11,6 +11,7 @@ from bergson import (
     GradientProcessor,
     TokenGradients,
     collect_gradients,
+    fit_normalizers,
     load_token_gradients,
 )
 from bergson.collector.gradient_collectors import GradientCollector
@@ -217,9 +218,11 @@ def test_token_score_writer(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_attribute_tokens_adam_raises():
-    with pytest.raises(ValueError, match="Adam normalizer"):
-        IndexConfig(run_path="test", attribute_tokens=True, normalizer="adam")
+def test_attribute_tokens_adam_allowed():
+    """Adam normalizer is now compatible with attribute_tokens."""
+    cfg = IndexConfig(run_path="test", attribute_tokens=True, normalizer="adam")
+    assert cfg.attribute_tokens is True
+    assert cfg.normalizer == "adam"
 
 
 def test_attribute_tokens_adafactor_allowed():
@@ -388,3 +391,65 @@ def test_token_score_e2e(tmp_path: Path, model, dataset):
         assert ex_scores.shape == (4, 1)
         # Scores should be non-zero
         assert np.abs(ex_scores.astype(np.float32)).sum() > 0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: build with attribute_tokens + Adam normalizer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_token_build_adam_e2e(tmp_path: Path, model, dataset):
+    """Build a token-attribution index with Adam normalizer."""
+    model = model.float()
+    dataset = dataset.repeat(10)
+
+    cfg = IndexConfig(
+        run_path=str(tmp_path),
+        skip_preconditioners=True,
+        token_batch_size=1024,
+        attribute_tokens=True,
+        normalizer="adam",
+    )
+
+    target_modules = {
+        name
+        for name, module in model.base_model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    }
+
+    normalizers = fit_normalizers(
+        model,
+        dataset,
+        cfg=cfg,
+        batches=[[idx] for idx in range(len(dataset))],
+        target_modules=target_modules,
+    )
+    processor = GradientProcessor(
+        projection_dim=16,
+        normalizers=normalizers,
+    )
+
+    collect_gradients(
+        model=model,
+        data=dataset,
+        processor=processor,
+        cfg=cfg,
+        target_modules=target_modules,
+    )
+
+    # Verify artifacts exist
+    assert (cfg.partial_run_path / "token_gradients.bin").exists()
+    assert (cfg.partial_run_path / "num_token_grads.npy").exists()
+    assert (cfg.partial_run_path / "offsets.npy").exists()
+
+    # Load and verify shapes
+    tg = TokenGradients(cfg.partial_run_path)
+    assert len(tg) == len(dataset)
+
+    # Each example has 5 tokens, all labels valid → 4 token grads
+    for i in range(len(dataset)):
+        assert tg.num_token_grads[i] == 4
+        assert tg[i].shape == (4, tg.mmap.shape[1])
+        # Gradients should be non-zero
+        assert np.linalg.norm(tg[i].astype(np.float32)) > 0

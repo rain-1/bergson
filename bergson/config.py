@@ -215,7 +215,7 @@ class IndexConfig:
 
     attribute_tokens: bool = False
     """Whether to compute per-token gradients instead of per-example.
-    Incompatible with Adam normalizer and reduce mode."""
+    Incompatible with reduce mode."""
 
     @property
     def partial_run_path(self) -> Path:
@@ -231,11 +231,6 @@ class IndexConfig:
 
         if isinstance(self.distributed, dict):
             self.distributed = DistributedConfig(**self.distributed)
-
-        if self.attribute_tokens and self.normalizer == "adam":
-            raise ValueError(
-                "attribute_tokens is incompatible with the Adam normalizer."
-            )
 
 
 @dataclass
