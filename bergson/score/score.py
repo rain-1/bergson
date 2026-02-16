@@ -16,7 +16,6 @@ from bergson.collection import collect_gradients
 from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import (
     allocate_batches,
-    compute_num_token_grads,
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
@@ -41,30 +40,25 @@ from bergson.utils.worker_utils import (
 
 def create_scorer(
     path: Path,
-    num_items: int,
+    data: Dataset,
     query_grads: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
     device: torch.device,
     dtype: torch.dtype,
     *,
     attribute_tokens: bool = False,
-    num_token_grads: np.ndarray | None = None,
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
     num_queries = len(query_grads[score_cfg.modules[0]])
     if attribute_tokens:
-        assert (
-            num_token_grads is not None
-        ), "num_token_grads is required for attribute_tokens"
         writer = MemmapTokenScoreWriter(
             path,
-            num_items,
+            data,
             num_queries,
-            num_token_grads,
             dtype=dtype,
         )
     else:
-        writer = MemmapSequenceScoreWriter(path, num_items, num_queries, dtype=dtype)
+        writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
     return Scorer(
         query_grads=query_grads,
         modules=score_cfg.modules,
@@ -295,22 +289,16 @@ def score_worker(
     )
     score_device = torch.device(f"cuda:{rank}")
 
-    if index_cfg.attribute_tokens and isinstance(ds, Dataset):
-        num_token_grads = compute_num_token_grads(ds)
-    else:
-        num_token_grads = None
-
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
-            len(ds),
+            ds,
             query_grads,
             score_cfg,
             device=score_device,
             dtype=score_dtype,
             attribute_tokens=index_cfg.attribute_tokens,
-            num_token_grads=num_token_grads,
         )
 
         collect_gradients(**kwargs)
@@ -331,7 +319,7 @@ def score_worker(
 
             kwargs["scorer"] = create_scorer(
                 index_cfg.partial_run_path / f"shard-{shard_id:05d}",
-                len(ds_shard),
+                ds_shard,
                 query_grads,
                 score_cfg,
                 device=score_device,

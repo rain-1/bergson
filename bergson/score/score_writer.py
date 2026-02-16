@@ -6,7 +6,9 @@ import ml_dtypes  # noqa: F401  # register bfloat16 dtype with numpy
 import numpy as np
 import torch
 import torch.distributed as dist
+from datasets import Dataset
 
+from bergson.data import compute_num_token_grads
 from bergson.utils.utils import convert_dtype_to_np, tensor_to_numpy
 
 
@@ -39,10 +41,11 @@ class InMemoryTokenScoreWriter(ScoreWriter):
 
     def __init__(
         self,
-        num_token_grads: np.ndarray,
+        data: Dataset,
         num_scores: int,
         dtype: torch.dtype = torch.float32,
     ):
+        num_token_grads = compute_num_token_grads(data)
         self.num_token_grads = num_token_grads
         self.offsets = np.zeros(len(num_token_grads) + 1, dtype=np.int64)
 
@@ -94,9 +97,8 @@ class MemmapTokenScoreWriter(ScoreWriter):
     def __init__(
         self,
         path: Path,
-        num_items: int,
+        data: Dataset,
         num_scores: int,
-        num_token_grads: np.ndarray,
         *,
         dtype: torch.dtype = torch.float32,
         flush_interval: int = 64,
@@ -107,6 +109,8 @@ class MemmapTokenScoreWriter(ScoreWriter):
         self.flush_interval = flush_interval
         self.num_batches_since_flush = 0
 
+        num_token_grads = compute_num_token_grads(data)
+        num_items = len(data)
         self.num_token_grads = num_token_grads
         self.offsets = np.zeros(len(num_token_grads) + 1, dtype=np.int64)
         np.cumsum(num_token_grads, out=self.offsets[1:])

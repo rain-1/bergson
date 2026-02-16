@@ -163,13 +163,13 @@ def test_token_builder_write(tmp_path: Path):
 
 
 def test_token_score_writer(tmp_path: Path):
-    num_token_grads = np.array([3, 2], dtype=np.int64)
+    # lengths [4, 3] → num_token_grads [3, 2]
+    ds = Dataset.from_dict({"input_ids": [[1, 2, 3, 4], [5, 6, 7]], "length": [4, 3]})
 
     writer = MemmapTokenScoreWriter(
         tmp_path,
-        num_items=2,
+        data=ds,
         num_scores=2,
-        num_token_grads=num_token_grads,
         dtype=torch.float32,
     )
 
@@ -337,14 +337,11 @@ def test_token_score_e2e(tmp_path: Path, model, dataset):
     # Fake query gradient (1 query)
     query_grads = {m: torch.randn(1, math.prod(shapes[m])) for m in modules}
 
-    num_token_grads = compute_num_token_grads(dataset)
-
     score_dtype = get_gradient_dtype(model)
     writer = MemmapTokenScoreWriter(
         tmp_path / "scores",
-        num_items=len(dataset),
+        data=dataset,
         num_scores=1,
-        num_token_grads=num_token_grads,
         dtype=score_dtype,
     )
 

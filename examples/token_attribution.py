@@ -25,10 +25,7 @@ from bergson import (
     ReduceConfig,
     Scorer,
 )
-from bergson.data import (
-    allocate_batches,
-    compute_num_token_grads,
-)
+from bergson.data import allocate_batches
 from bergson.score.score_writer import (
     InMemoryTokenScoreWriter,
 )
@@ -116,20 +113,16 @@ def main():
     )
     query_computer.run_with_collector_hooks(desc="query gradients")
 
-    # Extract reduced query gradient (1 vector per module)
-    query_grads = query_collector.gradients
-    modules = list(query_grads.keys())
-    print(f"Reduced query to 1 vector across " f"{len(modules)} modules")
+    print(f"Reduced query to 1 vector across {len(target_modules)} modules")
 
     # Step 2: Create scorer with InMemoryTokenScoreWriter
-    train_ntg = compute_num_token_grads(train_ds)
     writer = InMemoryTokenScoreWriter(
-        num_token_grads=train_ntg,
+        data=train_ds,
         num_scores=1,
     )
     scorer = Scorer(
-        query_grads=query_grads,
-        modules=modules,
+        query_grads=query_collector.gradients,
+        modules=list(target_modules),
         writer=writer,
         device=torch.device("cuda"),
         dtype=torch.float32,
