@@ -159,12 +159,11 @@ def main():
     print("\nPer-token attribution scores:")
     for i in range(len(train_ds)):
         scores_i = score_collector.scores[i]
-        ntg = int(train_ntg[i])
-        if ntg == 0:
+        if scores_i.shape[0] == 0:
             continue
         print(
             f"  Example {i}: "
-            f"{ntg} tokens, "
+            f"{scores_i.shape[0]} tokens, "
             f"scores shape {tuple(scores_i.shape)}, "
             f"mean={scores_i.mean():.4e}, "
             f"max={scores_i.max():.4e}"

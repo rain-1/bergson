@@ -120,26 +120,3 @@ def test_in_memory_reduce(tmp_path: Path):
     results = collector.gradients
 
     assert all(len(results[name]) == 1 for name in results.keys())
-
-    # # Print directory
-    # import os
-    # print(f"\nDEBUG: Run path is: {index_cfg.run_path}")
-
-    # if not os.path.exists(index_cfg.run_path):
-    #     print("DEBUG: Run path does NOT exist.")
-    #     # Check the parent tmp_path to see what IS there
-    #     print(f"DEBUG: Contents of {tmp_path}:")
-    #     for root, dirs, files in os.walk(tmp_path):
-    #         print(f"  {root}/")
-    #         for f in files:
-    #             print(f"    {f}")
-    # else:
-    #     print("DEBUG: Run path exists. Contents:")
-    #     for root, dirs, files in os.walk(index_cfg.run_path):
-    #         print(f"  {root}/")
-    #         for f in files:
-    #             print(f"    {f}")
-
-    # Assert 1-row reduction exists at the tmp_path
-    # ds = load_gradient_dataset(Path(index_cfg.run_path), structured=False)
-    # assert len(ds) == 1
