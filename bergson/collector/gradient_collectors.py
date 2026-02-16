@@ -178,7 +178,7 @@ class GradientCollector(HookCollectorBase):
             if self.cfg.attribute_tokens:
                 # [N, S, O/p, 1] * [N, S, 1, I/q] → [N, S, O/p, I/q]
                 P = g.unsqueeze(-1) * a.unsqueeze(-2)
-                P = P.flatten(2).clamp_(self.lo, self.hi)  # [N, S, grad_dim]
+                P = P.flatten(2)  # [N, S, grad_dim]
 
                 # Filter to valid positions only
                 # Mask is [N, S]

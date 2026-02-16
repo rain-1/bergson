@@ -227,7 +227,7 @@ class InMemoryCollector(HookCollectorBase):
                 # Per-position outer product
                 # [N,S,O/p,1]*[N,S,1,I/q] -> [N,S,O/p,I/q]
                 P = g.unsqueeze(-1) * a.unsqueeze(-2)
-                P = P.flatten(2).clamp_(self.lo, self.hi)
+                P = P.flatten(2)
 
                 # Filter to valid positions
                 P = P[self._current_valid_mask]
