@@ -12,11 +12,7 @@ from torch import Tensor, nn
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import (
-    Builder,
-    InMemorySequenceBuilder,
-    InMemoryTokenBuilder,
-)
+from bergson.data import Builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -116,19 +112,13 @@ class InMemoryCollector(HookCollectorBase):
         # Create in-memory builder when not scoring
         if self.builder is None and self.scorer is None:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            if self.cfg.attribute_tokens:
-                self.builder = InMemoryTokenBuilder(
-                    self.data,
-                    grad_sizes,
-                    self.save_dtype,
-                )
-            else:
-                self.builder = InMemorySequenceBuilder(
-                    self.data,
-                    grad_sizes,
-                    self.save_dtype,
-                    reduce_cfg=self.reduce_cfg,
-                )
+            self.builder = Builder(
+                self.data,
+                grad_sizes,
+                self.save_dtype,
+                attribute_tokens=self.cfg.attribute_tokens,
+                reduce_cfg=self.reduce_cfg,
+            )
 
     def teardown(self) -> None:
         assert isinstance(self.cfg, IndexConfig)

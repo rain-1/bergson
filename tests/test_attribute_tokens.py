@@ -137,7 +137,7 @@ def test_token_builder_write(tmp_path: Path):
     # [2, 3, 1]
     grad_sizes = {"m": 2}
 
-    builder = TokenBuilder(tmp_path, ds, grad_sizes, torch.float32)
+    builder = TokenBuilder(ds, grad_sizes, torch.float32, path=tmp_path)
 
     # Write examples 0 and 2 (non-contiguous!)
     mod_grads = {

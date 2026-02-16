@@ -13,6 +13,7 @@ from .config import (
     ScoreConfig,
 )
 from .data import (
+    Builder,
     InMemorySequenceBuilder,
     InMemoryTokenBuilder,
     TokenGradients,
@@ -33,6 +34,7 @@ __all__ = [
     "load_gradient_dataset",
     "load_token_gradients",
     "TokenGradients",
+    "Builder",
     "InMemorySequenceBuilder",
     "InMemoryTokenBuilder",
     "fit_normalizers",

@@ -183,9 +183,40 @@ class TokenGradients:
 
 
 class Builder(ABC):
-    """Interface for gradient index writers."""
+    """Interface for gradient index writers.
+
+    Calling ``Builder(...)`` directly dispatches to the appropriate
+    concrete subclass based on *attribute_tokens* and *path*:
+
+    * ``path`` given + ``attribute_tokens`` → :class:`TokenBuilder`
+    * ``path`` given                        → :class:`SequenceBuilder`
+    * no ``path`` + ``attribute_tokens``    → :class:`InMemoryTokenBuilder`
+    * no ``path``                           → :class:`InMemorySequenceBuilder`
+    """
 
     grad_buffer: np.ndarray
+
+    def __new__(
+        cls,
+        data: Dataset,
+        grad_sizes: dict[str, int],
+        dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
+    ):
+        if cls is not Builder:
+            return super().__new__(cls)
+
+        if path is not None:
+            subcls = TokenBuilder if attribute_tokens else SequenceBuilder
+        else:
+            subcls = (
+                InMemoryTokenBuilder if attribute_tokens else InMemorySequenceBuilder
+            )
+
+        return super().__new__(subcls)
 
     @abstractmethod
     def __call__(
@@ -206,25 +237,27 @@ class TokenBuilder(Builder):
 
     Parameters
     ----------
-    path : Path
-        Root directory for the index artifacts.
     data : Dataset
         The dataset being indexed (used only for length).
     grad_sizes : dict[str, int]
         Per-module gradient dimensions.
     dtype : torch.dtype
         Torch dtype for the gradients (converted to numpy internally).
-    num_token_grads : np.ndarray
-        Number of valid positions per example.
+    path : Path
+        Root directory for the index artifacts.
     """
 
     def __init__(
         self,
-        path: Path,
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
     ):
+        assert path is not None
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         np_dtype = convert_dtype_to_np(dtype)
@@ -300,6 +333,9 @@ class InMemorySequenceBuilder(Builder):
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
         reduce_cfg: ReduceConfig | None = None,
     ):
         self.grad_sizes = grad_sizes
@@ -429,6 +465,10 @@ class InMemoryTokenBuilder(Builder):
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
     ):
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
@@ -833,12 +873,15 @@ class SequenceBuilder(Builder):
 
     def __init__(
         self,
-        path: Path,
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
         reduce_cfg: ReduceConfig | None = None,
     ):
+        assert path is not None
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         self.reduce_cfg = reduce_cfg
