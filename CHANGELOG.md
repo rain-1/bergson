@@ -1,6 +1,51 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-02-17)
+
+### Bug Fixes
+
+- Use _csv._writer type for csv_recorder annotation
+  ([`6e6289c`](https://github.com/EleutherAI/bergson/commit/6e6289c266b36304a6d79a35bb6b9fe3c35fa95a))
+
+csv.writer is a function, not a class, so it cannot be used as a type annotation. Import the private
+  _writer type from _csv and use it for the Generator yield type. Also fix the None check to use `if
+  not path` since QueryConfig.record uses empty string as the sentinel value.
+
+Co-authored-by: Lucia Quirke <luciaquirke@users.noreply.github.com>
+
+### Continuous Integration
+
+- Pin pyright version and fix faiss type error
+  ([`b9f54cf`](https://github.com/EleutherAI/bergson/commit/b9f54cf9e7caf3c13af78f1a2d3d766f2055c3da))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Use Python 3.11 for typechecking
+  ([`9ef4122`](https://github.com/EleutherAI/bergson/commit/9ef4122903eed2ecf496f803c5d1aba4c62295cb))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Use Python 3.11 for typechecking
+  ([`ea50dd8`](https://github.com/EleutherAI/bergson/commit/ea50dd8ed9dc02b0f21ce7621f7d0ff53622ea87))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add --record flag to query CLI for saving results to CSV
+  ([`59770ff`](https://github.com/EleutherAI/bergson/commit/59770ff88c5dbfffabd6ce0f51e5a56edbae2c0b))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Refactoring
+
+- Replace try/finally CSV block with context manager
+  ([`6431320`](https://github.com/EleutherAI/bergson/commit/6431320b7c167191b157b3fc53013818ecdd5135))
+
+Co-authored-by: Lucia Quirke <luciaquirke@users.noreply.github.com>
+
+
 ## v0.5.2 (2026-02-17)
 
 ### Bug Fixes
