@@ -32,15 +32,16 @@ from benchmarks.benchmark_dattri import (
 from benchmarks.benchmark_utils import (
     extract_gpu_info,
     format_tokens,
+    model_color,
 )
 
 BENCH_ROOT = Path("/projects/a6a/public/lucia/proj_bench")
 FIXED_BERGSON_ROOT = Path("/projects/a6a/public/lucia/proj_bench_bergson_fixedbatch")
 
-# method -> (color, marker)
+# method -> (marker, linestyle)
 METHOD_STYLES = {
-    "bergson": ("#2ca02c", "o"),
-    "dattri": ("#d62728", "^"),
+    "bergson": ("o", "-"),
+    "dattri": ("^", "--"),
 }
 
 
@@ -149,17 +150,19 @@ def _plot_panel(ax, df: pd.DataFrame, title: str):
         return
 
     for model_key in sorted(df["model_key"].unique()):
+        color = model_color(model_key)
         for method in ["bergson", "dattri"]:
             subset = df[(df["method"] == method) & (df["model_key"] == model_key)]
             if subset.empty:
                 continue
             subset = subset.sort_values("train_tokens")
-            color, marker = METHOD_STYLES[method]
+            marker, linestyle = METHOD_STYLES[method]
             ax.plot(
                 subset["train_tokens"],
                 subset["runtime_seconds"],
                 marker=marker,
                 color=color,
+                linestyle=linestyle,
                 label=f"{method} ({model_key})",
                 linewidth=1.5,
                 markersize=6,
