@@ -173,12 +173,11 @@ class Trackstar:
         validate_run_path(query_precond_cfg)
         build(query_precond_cfg)
 
-        # Step 3: Reduce query dataset using query processor
+        # Step 3: Reduce query dataset without preprocessing
         print("Step 3/4: Reducing query dataset...")
         query_cfg = deepcopy(self.index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = self.trackstar_cfg.query
-        query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
         validate_run_path(query_cfg)
         reduce(query_cfg, self.reduce_cfg)

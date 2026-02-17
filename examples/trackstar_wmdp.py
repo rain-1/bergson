@@ -43,6 +43,7 @@ cmd = [
     # Reduce and score methods
     "--method",
     "mean",
+    "--score_cfg.unit_normalize",
     "--score",
     "mean",
     "--overwrite",
