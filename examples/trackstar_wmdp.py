@@ -3,7 +3,7 @@
 
 Computes adafactor normalizers and preconditioners on both query and value
 datasets (up to 10k samples each). Preconditioners are not recomputed during
-reduce or score.
+build or score.
 """
 
 import subprocess
@@ -41,10 +41,8 @@ cmd = [
     "wmdp-bio",
     "--query.prompt_column",
     "question",
-    # Reduce and score methods
-    "--method",
-    "mean",
-    "--score_cfg.unit_normalize",
+    # Score settings
+    "--unit_normalize",
     "--score",
     "mean",
     "--overwrite",

@@ -136,18 +136,16 @@ class Hessian:
 
 @dataclass
 class Trackstar:
-    """Run preconditioners, reduce, and score as a single pipeline."""
+    """Run preconditioners, build, and score as a single pipeline."""
 
     index_cfg: IndexConfig
 
     trackstar_cfg: TrackstarConfig
 
-    reduce_cfg: ReduceConfig
-
     score_cfg: ScoreConfig
 
     def execute(self):
-        """Run the full trackstar pipeline: preconditioners -> reduce -> score."""
+        """Run the full trackstar pipeline: preconditioners -> build -> score."""
         run_path = self.index_cfg.run_path
         value_precond_path = f"{run_path}/value_preconditioner"
         query_precond_path = f"{run_path}/query_preconditioner"
@@ -173,14 +171,14 @@ class Trackstar:
         validate_run_path(query_precond_cfg)
         build(query_precond_cfg)
 
-        # Step 3: Reduce query dataset without preprocessing
-        print("Step 3/4: Reducing query dataset...")
+        # Step 3: Build query dataset index without preconditioners
+        print("Step 3/4: Building query dataset index...")
         query_cfg = deepcopy(self.index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = self.trackstar_cfg.query
         query_cfg.skip_preconditioners = True
         validate_run_path(query_cfg)
-        reduce(query_cfg, self.reduce_cfg)
+        build(query_cfg)
 
         # Step 4: Score value dataset against query using both preconditioners
         print("Step 4/4: Scoring value dataset...")
