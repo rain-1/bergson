@@ -1,3 +1,4 @@
+import csv
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -59,35 +60,56 @@ def query(
     # Get the device of the first model parameter for multi-GPU setups
     model_device = next(model.parameters()).device
 
+    # Set up CSV recording if requested
+    csv_file = None
+    csv_writer = None
+    if query_cfg.record:
+        csv_file = open(query_cfg.record, "a", newline="")
+        csv_writer = csv.writer(csv_file)
+        if csv_file.tell() == 0:
+            csv_writer.writerow(["query", "result", "result_index", "score"])
+
     # Query loop
-    while True:
-        query = input("Enter your query: ")
-        if query.lower() == "exit":
-            break
+    try:
+        while True:
+            query = input("Enter your query: ")
+            if query.lower() == "exit":
+                break
 
-        # Tokenize the query
-        inputs = tokenizer(query, return_tensors="pt").to(model_device)
-        x = inputs["input_ids"]
+            # Tokenize the query
+            inputs = tokenizer(query, return_tensors="pt").to(model_device)
+            x = inputs["input_ids"]
 
-        with attr.trace(
-            model.base_model, 5, modules=target_modules, reverse=query_cfg.reverse
-        ) as result:
-            model(x, labels=x).loss.backward()
-            model.zero_grad()
+            with attr.trace(
+                model.base_model, 5, modules=target_modules, reverse=query_cfg.reverse
+            ) as result:
+                model(x, labels=x).loss.backward()
+                model.zero_grad()
 
-        # Print the results
-        mode = "Bottom" if query_cfg.reverse else "Top"
-        print(f"{mode} 5 results for '{query}':")
-        for i, (d, idx) in enumerate(
-            zip(result.scores.squeeze(), result.indices.squeeze())
-        ):
-            if idx.item() == -1:
-                print("Found invalid result, skipping")
-                continue
+            # Print the results
+            mode = "Bottom" if query_cfg.reverse else "Top"
+            print(f"{mode} 5 results for '{query}':")
+            for i, (d, idx) in enumerate(
+                zip(result.scores.squeeze(), result.indices.squeeze())
+            ):
+                if idx.item() == -1:
+                    print("Found invalid result, skipping")
+                    continue
 
-            text = str(ds[int(idx.item())][query_cfg.text_field])  # type: ignore[arg-type]
-            print(text[:2000])
-            if len(text) > 2000:
-                print(". . .")
+                idx_int = int(idx.item())
+                score = d.item()
+                text = str(ds[idx_int][query_cfg.text_field])  # type: ignore[arg-type]
+                print(text[:2000])
+                if len(text) > 2000:
+                    print(". . .")
 
-            print(f"{i + 1}: (distance: {d.item():.4f})")
+                print(f"{i + 1}: (distance: {score:.4f})")
+
+                if csv_writer is not None:
+                    csv_writer.writerow([query, text, idx_int, score])
+
+            if csv_file is not None:
+                csv_file.flush()
+    finally:
+        if csv_file is not None:
+            csv_file.close()
