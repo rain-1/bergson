@@ -6,9 +6,10 @@ datasets (up to 10k samples each). Preconditioners are not recomputed during
 reduce or score.
 """
 
-import subprocess
 import sys
 from pathlib import Path
+
+from datasets import load_dataset
 
 from bergson.data import load_scores
 
@@ -48,7 +49,7 @@ cmd = [
 ]
 
 print(" ".join(cmd))
-subprocess.run(cmd, check=True)
+# subprocess.run(cmd, check=True)
 
 print(
     "If everything worked, your scores should be in "
@@ -62,3 +63,12 @@ print("First 10 scores: ")
 
 scores = load_scores(Path("runs/trackstar_wmdp/scores"))
 print(scores[:10])
+
+print("Highest scoring items: ")
+
+pile_ds = load_dataset("NeelNanda/pile-10k", split="train")
+
+top_indices = scores[:].flatten().argsort()[-10:][::-1]
+for idx in top_indices:
+    print(f"Index: {idx}, Scores: {scores[idx]}")
+    print(f"Start of text: {pile_ds[idx]['text'][:50]}")
