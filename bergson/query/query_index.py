@@ -1,7 +1,9 @@
 import csv
 import json
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from typing import Generator
 
 from transformers import AutoTokenizer
 
@@ -10,6 +12,20 @@ from bergson.config import IndexConfig, QueryConfig
 from bergson.data import load_data_string
 from bergson.utils.utils import setup_reproducibility
 from bergson.utils.worker_utils import setup_model_and_peft
+
+
+@contextmanager
+def csv_recorder(path: str | None) -> Generator[csv.writer | None, None, None]:
+    """Open a CSV file for appending query results, or yield None if no path given."""
+    if path is None:
+        yield None
+        return
+
+    with open(path, "a", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        if csv_file.tell() == 0:
+            writer.writerow(["query", "result", "result_index", "score"])
+        yield writer
 
 
 def query(
@@ -60,17 +76,7 @@ def query(
     # Get the device of the first model parameter for multi-GPU setups
     model_device = next(model.parameters()).device
 
-    # Set up CSV recording if requested
-    csv_file = None
-    csv_writer = None
-    if query_cfg.record:
-        csv_file = open(query_cfg.record, "a", newline="")
-        csv_writer = csv.writer(csv_file)
-        if csv_file.tell() == 0:
-            csv_writer.writerow(["query", "result", "result_index", "score"])
-
-    # Query loop
-    try:
+    with csv_recorder(query_cfg.record) as csv_writer:
         while True:
             query = input("Enter your query: ")
             if query.lower() == "exit":
@@ -107,9 +113,3 @@ def query(
 
                 if csv_writer is not None:
                     csv_writer.writerow([query, text, idx_int, score])
-
-            if csv_file is not None:
-                csv_file.flush()
-    finally:
-        if csv_file is not None:
-            csv_file.close()
