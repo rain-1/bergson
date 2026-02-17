@@ -1,5 +1,6 @@
 import csv
 import json
+from _csv import _writer as CsvWriter
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -15,9 +16,9 @@ from bergson.utils.worker_utils import setup_model_and_peft
 
 
 @contextmanager
-def csv_recorder(path: str | None) -> Generator[csv.writer | None, None, None]:
+def csv_recorder(path: str) -> Generator[CsvWriter | None, None, None]:
     """Open a CSV file for appending query results, or yield None if no path given."""
-    if path is None:
+    if not path:
         yield None
         return
 
