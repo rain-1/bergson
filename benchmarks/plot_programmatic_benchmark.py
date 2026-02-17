@@ -17,6 +17,7 @@ from benchmarks.benchmark_bergson import RunRecord, load_records
 from benchmarks.benchmark_utils import (
     extract_gpu_info,
     get_hardware_info,
+    model_color,
 )
 
 
@@ -61,6 +62,7 @@ def _plot_build_score(
 ) -> None:
     """Plot build and score runtime on a single axes."""
     for model_key in sorted(df["model_key"].unique()):
+        color = model_color(model_key)
         subset = df[df["model_key"] == model_key]
         subset = subset.sort_values("train_tokens")
         if subset["build_seconds"].notna().any():
@@ -68,6 +70,7 @@ def _plot_build_score(
                 subset["train_tokens"],
                 subset["build_seconds"],
                 marker="^",
+                color=color,
                 label=f"{model_key} (build)",
                 linewidth=2,
                 linestyle="--",
@@ -77,6 +80,7 @@ def _plot_build_score(
                 subset["train_tokens"],
                 subset["score_seconds"],
                 marker="D",
+                color=color,
                 label=f"{model_key} (score)",
                 linewidth=2,
                 linestyle=":",
