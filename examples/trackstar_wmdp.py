@@ -8,6 +8,9 @@ reduce or score.
 
 import subprocess
 import sys
+from pathlib import Path
+
+from bergson.data import load_scores
 
 cmd = [
     sys.executable,
@@ -46,3 +49,16 @@ cmd = [
 
 print(" ".join(cmd))
 subprocess.run(cmd, check=True)
+
+print(
+    "If everything worked, your scores should be in "
+    "runs/trackstar_wmdp/scores/scores.bin"
+)
+print(
+    "You can load the memmap using "
+    "bergson.data.load_scores('runs/trackstar_wmdp/scores')"
+)
+print("First 10 scores: ")
+
+scores = load_scores(Path("runs/trackstar_wmdp/scores"))
+print(scores[:10])

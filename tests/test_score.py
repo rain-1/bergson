@@ -141,7 +141,19 @@ def test_score(tmp_path: Path, model, dataset):
 
     assert info["num_scores"] == 1
 
-    assert np.allclose(scores["score_0"], np.array([1.8334405, 0.3371131]))
+    assert np.allclose(
+        scores[:],
+        np.array(
+            [
+                [
+                    1.8334405,
+                ],
+                [
+                    0.3371131,
+                ],
+            ]
+        ),
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

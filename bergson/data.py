@@ -4,7 +4,7 @@ import os
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Sequence, cast, overload
+from typing import Any, Sequence
 
 import ml_dtypes  # noqa: F401  # registers bfloat16 dtype with numpy
 import numpy as np
@@ -19,6 +19,7 @@ from datasets import (
     concatenate_datasets,
     load_dataset,
 )
+from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import DTypeLike
 
 from .config import DataConfig, ReduceConfig
@@ -789,15 +790,29 @@ def load_gradient_dataset(root_dir: Path, structured: bool = True) -> Dataset:
     ).flatten_indices()
 
 
-class Scores(np.memmap):
-    @overload
-    def __getitem__(self, key: str) -> np.ndarray[Any, Any]: ...
+class Scores:
+    def __init__(self, mmap: np.memmap, info: dict[str, Any]):
+        self.mmap = mmap
+        self.info = info
+        self.num_scores = info["num_scores"]
 
-    @overload
-    def __getitem__(self, key: int | slice) -> Any: ...
+        self._score_fields = [f"score_{i}" for i in range(self.num_scores)]
 
-    def __getitem__(self, key: Any) -> Any:  # type: ignore
-        return super().__getitem__(key)
+    def __len__(self) -> int:
+        return len(self.mmap)
+
+    def __getitem__(self, key: Any) -> Any:
+        items = self.mmap[key]
+        return structured_to_unstructured(items[self._score_fields])
+
+    def get(self, key: Any, score_idx: int = 0) -> Any:
+        """Get scores for a specific score index."""
+        return self.mmap[key][f"score_{score_idx}"]
+
+    def is_written(self) -> bool:
+        """Check whether all scores in the structured mmap have
+        been written to (i.e. are not still zeros)"""
+        return all(np.all(self.mmap[f"written_{i}"]) for i in range(self.num_scores))
 
 
 def load_scores(
@@ -816,7 +831,7 @@ def load_scores(
         shape=(info["num_items"],),
     )
 
-    return cast(Scores, mmap)
+    return Scores(mmap, info)
 
 
 class SequenceBuilder(Builder):
