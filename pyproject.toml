@@ -27,7 +27,7 @@ version = "0.5.1"
 dev = [
     "pre-commit",
     "pytest",
-    "pyright",
+    "pyright==1.1.378",
     "trl",
     # Generate documentation
     "furo",

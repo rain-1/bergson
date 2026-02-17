@@ -178,6 +178,7 @@ See `benchmarks/` for scripts to reproduce and generate benchmarks on your own h
 pip install -e ".[dev]"
 pre-commit install
 pytest
+pyright
 ```
 
 We use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) for releases.
