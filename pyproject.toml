@@ -22,12 +22,12 @@ dependencies = [
     "torch",
     "transformers<4.56.0" # 4.56.0 increases fp error from operation order
 ]
-version = "0.5.1"
+version = "0.5.2"
 [project.optional-dependencies]
 dev = [
     "pre-commit",
     "pytest",
-    "pyright",
+    "pyright==1.1.378", # pinned to match CI (build.yml)
     "trl",
     # Generate documentation
     "furo",

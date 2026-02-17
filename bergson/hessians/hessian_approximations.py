@@ -23,7 +23,6 @@ from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     convert_precision_to_torch,
     setup_reproducibility,
-    validate_batch_size,
 )
 from bergson.utils.worker_utils import (
     setup_data_pipeline,
@@ -215,6 +214,7 @@ def collect_hessians(
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs or {},
         "path": str(index_cfg.partial_run_path),
+        "filter_modules": index_cfg.filter_modules,
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:
@@ -223,8 +223,6 @@ def collect_hessians(
     else:
         collector_args["dtype"] = hessian_dtype
         collector = HESSIAN_APPROXIMATIONS[hessian_cfg.method](**collector_args)
-
-    validate_batch_size(model, index_cfg.token_batch_size, collector)
 
     computer = CollectorComputer(
         model=model,  # type: ignore

@@ -8,6 +8,21 @@ from bergson import Attributor, FaissConfig, GradientProcessor, collect_gradient
 from bergson.config import IndexConfig
 
 
+def _has_faiss_gpu() -> bool:
+    """Check if faiss-gpu is installed and functional."""
+    try:
+        import faiss  # type: ignore[import]
+
+        return hasattr(faiss, "GpuMultipleClonerOptions")
+    except ImportError:
+        return False
+
+
+requires_faiss_gpu = pytest.mark.skipif(
+    not _has_faiss_gpu(), reason="faiss-gpu not available"
+)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_attributor(tmp_path: Path, model, dataset):
     cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
@@ -32,9 +47,9 @@ def test_attributor(tmp_path: Path, model, dataset):
     assert result.scores[0, 1].item() < 0.50  # Different item
 
 
+@requires_faiss_gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_faiss(tmp_path: Path, model, dataset):
-    pytest.importorskip("faiss")
     dtype: Any = model.dtype
     model.to("cuda")
     dtype = torch.float32 if model.dtype == torch.float32 else torch.float16
@@ -102,10 +117,10 @@ def test_attributor_reverse(tmp_path: Path, model, dataset):
     assert reverse_result.indices[0, 0].item() != 0  # Same item is NOT lowest match
 
 
+@requires_faiss_gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_faiss_reverse(tmp_path: Path, model, dataset):
     """Test that reverse mode works with FAISS index."""
-    pytest.importorskip("faiss")
     dtype: Any = model.dtype
     model.to("cuda")
     dtype = torch.float32 if model.dtype == torch.float32 else torch.float16
