@@ -1,4 +1,5 @@
 import shutil
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -6,7 +7,14 @@ from typing import Optional, Union
 from simple_parsing import ArgumentParser, ConflictResolution
 
 from .build import build
-from .config import HessianConfig, IndexConfig, QueryConfig, ReduceConfig, ScoreConfig
+from .config import (
+    HessianConfig,
+    IndexConfig,
+    QueryConfig,
+    ReduceConfig,
+    ScoreConfig,
+    TrackstarConfig,
+)
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .reduce import reduce
@@ -43,6 +51,20 @@ class Build:
 
         validate_run_path(self.index_cfg)
 
+        build(self.index_cfg)
+
+
+@dataclass
+class Preconditioners:
+    """Compute normalizers and preconditioners without gradient collection."""
+
+    index_cfg: IndexConfig
+
+    def execute(self):
+        """Compute normalizers and preconditioners."""
+        self.index_cfg.skip_index = True
+        self.index_cfg.skip_preconditioners = False
+        validate_run_path(self.index_cfg)
         build(self.index_cfg)
 
 
@@ -113,10 +135,59 @@ class Hessian:
 
 
 @dataclass
+class Trackstar:
+    """Run preconditioners, reduce, and score as a single pipeline."""
+
+    index_cfg: IndexConfig
+
+    trackstar_cfg: TrackstarConfig
+
+    reduce_cfg: ReduceConfig
+
+    score_cfg: ScoreConfig
+
+    def execute(self):
+        """Run the full trackstar pipeline: preconditioners -> reduce -> score."""
+        run_path = self.index_cfg.run_path
+        precond_path = f"{run_path}/preconditioner"
+        query_path = f"{run_path}/query"
+        scores_path = f"{run_path}/scores"
+
+        # Step 1: Compute preconditioners on value dataset
+        print("Step 1/3: Computing preconditioners on value dataset...")
+        precond_cfg = deepcopy(self.index_cfg)
+        precond_cfg.run_path = precond_path
+        precond_cfg.skip_index = True
+        precond_cfg.skip_preconditioners = False
+        validate_run_path(precond_cfg)
+        build(precond_cfg)
+
+        # Step 2: Reduce query dataset using pre-computed processor
+        print("Step 2/3: Reducing query dataset...")
+        query_cfg = deepcopy(self.index_cfg)
+        query_cfg.run_path = query_path
+        query_cfg.data = self.trackstar_cfg.query
+        query_cfg.processor_path = precond_path
+        query_cfg.skip_preconditioners = True
+        validate_run_path(query_cfg)
+        reduce(query_cfg, self.reduce_cfg)
+
+        # Step 3: Score value dataset against query
+        print("Step 3/3: Scoring value dataset...")
+        score_index_cfg = deepcopy(self.index_cfg)
+        score_index_cfg.run_path = scores_path
+        score_index_cfg.processor_path = precond_path
+        score_index_cfg.skip_preconditioners = True
+        self.score_cfg.query_path = query_path
+        validate_run_path(score_index_cfg)
+        score_dataset(score_index_cfg, self.score_cfg)
+
+
+@dataclass
 class Main:
     """Routes to the subcommands."""
 
-    command: Union[Build, Query, Reduce, Score, Hessian]
+    command: Union[Build, Query, Preconditioners, Reduce, Score, Hessian, Trackstar]
 
     def execute(self):
         """Run the script."""

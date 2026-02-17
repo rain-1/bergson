@@ -367,3 +367,11 @@ class FaissConfig:
 
     nprobe: int = 10
     """The number of FAISS vector clusters to search if using ANN."""
+
+
+@dataclass
+class TrackstarConfig:
+    """Config for the trackstar pipeline query dataset."""
+
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset specification."""
