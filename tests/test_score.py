@@ -18,7 +18,7 @@ from bergson.collector.gradient_collectors import GradientCollector
 from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import create_index, load_scores
 from bergson.score.score import precondition_grads
-from bergson.score.score_writer import MemmapScoreWriter
+from bergson.score.score_writer import MemmapSequenceScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import (
     convert_precision_to_torch,
@@ -110,7 +110,9 @@ def test_score(tmp_path: Path, model, dataset):
         else get_gradient_dtype(model)
     )
 
-    score_writer = MemmapScoreWriter(tmp_path, len(dataset), 1, dtype=score_dtype)
+    score_writer = MemmapSequenceScoreWriter(
+        tmp_path, len(dataset), 1, dtype=score_dtype
+    )
     scorer = Scorer(
         query_grads=query_grads,
         modules=list(shapes.keys()),
@@ -195,11 +197,13 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
 
 
 def test_memmap_score_writer_bfloat16(tmp_path: Path):
-    """Test that MemmapScoreWriter correctly writes and reads bfloat16 scores."""
+    """MemmapSequenceScoreWriter writes and reads bfloat16."""
     num_items = 10
     num_scores = 3
 
-    writer = MemmapScoreWriter(tmp_path, num_items, num_scores, dtype=torch.bfloat16)
+    writer = MemmapSequenceScoreWriter(
+        tmp_path, num_items, num_scores, dtype=torch.bfloat16
+    )
 
     # Create some test scores in bfloat16
     scores_batch1 = torch.tensor(
@@ -255,11 +259,13 @@ def test_memmap_score_writer_bfloat16(tmp_path: Path):
 
 
 def test_memmap_score_writer_float32(tmp_path: Path):
-    """Test that MemmapScoreWriter correctly writes float32 scores (baseline)."""
+    """MemmapSequenceScoreWriter writes float32 scores."""
     num_items = 5
     num_scores = 2
 
-    writer = MemmapScoreWriter(tmp_path, num_items, num_scores, dtype=torch.float32)
+    writer = MemmapSequenceScoreWriter(
+        tmp_path, num_items, num_scores, dtype=torch.float32
+    )
 
     scores = torch.tensor([[1.5, 2.5], [3.5, 4.5]], dtype=torch.float32)
     writer([0, 1], scores)

@@ -10,7 +10,7 @@ from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder
+from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -88,12 +88,13 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
 
         if self.save_index:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = Builder(
-                self.cfg.partial_run_path,
+            self.builder = create_builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,
-                self.reduce_cfg,
+                attribute_tokens=self.cfg.attribute_tokens,
+                path=self.cfg.partial_run_path,
+                reduce_cfg=self.reduce_cfg,
             )
         else:
             self.builder = None

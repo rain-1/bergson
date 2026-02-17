@@ -27,7 +27,7 @@ from bergson.collector.in_memory_collector import InMemoryCollector
 from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches
 from bergson.gradients import GradientProcessor
-from bergson.score.score_writer import InMemoryScoreWriter
+from bergson.score.score_writer import InMemorySequenceScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.auto_batch_size import determine_batch_size
 from bergson.utils.utils import assert_type
@@ -303,13 +303,12 @@ class Run:
             query_time = time.perf_counter() - query_start
             print(f"Query phase completed in " f"{query_time:.2f} seconds")
 
-            query_grads = {
-                name: torch.cat(grads, dim=0)
-                for name, grads in query_collector.gradients.items()
-            }
+            query_grads = query_collector.gradients
             modules = list(query_grads.keys())
             num_queries = len(query_grads[modules[0]])
-            writer = InMemoryScoreWriter(len(ds), num_queries, dtype=torch.bfloat16)
+            writer = InMemorySequenceScoreWriter(
+                len(ds), num_queries, dtype=torch.bfloat16
+            )
             scorer = Scorer(
                 query_grads=query_grads,
                 modules=modules,
