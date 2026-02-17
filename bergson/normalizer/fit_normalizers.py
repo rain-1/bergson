@@ -184,6 +184,7 @@ def fit_normalizers(
         model=model,
         data=data,
         collector=collector,
+        batches=batches,
         cfg=cfg,
     )
     computer.run_with_collector_hooks(desc="Estimating normalizers")
