@@ -1,4 +1,3 @@
-import pytest
 from datasets import Dataset
 
 from bergson.config import DataConfig
