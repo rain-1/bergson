@@ -14,10 +14,16 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.config import IndexConfig, ScoreConfig
-from bergson.data import allocate_batches, load_gradients
+from bergson.data import (
+    allocate_batches,
+    load_gradients,
+)
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
-from bergson.score.score_writer import MemmapScoreWriter
+from bergson.score.score_writer import (
+    MemmapSequenceScoreWriter,
+    MemmapTokenScoreWriter,
+)
 from bergson.score.scorer import Scorer
 from bergson.utils.math import compute_damped_inverse
 from bergson.utils.utils import (
@@ -34,15 +40,25 @@ from bergson.utils.worker_utils import (
 
 def create_scorer(
     path: Path,
-    num_items: int,
+    data: Dataset,
     query_grads: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
     device: torch.device,
     dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
     num_queries = len(query_grads[score_cfg.modules[0]])
-    writer = MemmapScoreWriter(path, num_items, num_queries, dtype=dtype)
+    if attribute_tokens:
+        writer = MemmapTokenScoreWriter(
+            path,
+            data,
+            num_queries,
+            dtype=dtype,
+        )
+    else:
+        writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
     return Scorer(
         query_grads=query_grads,
         modules=score_cfg.modules,
@@ -51,6 +67,7 @@ def create_scorer(
         dtype=dtype,
         unit_normalize=score_cfg.unit_normalize,
         score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
+        attribute_tokens=attribute_tokens,
     )
 
 
@@ -276,11 +293,12 @@ def score_worker(
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
-            len(ds),
+            ds,
             query_grads,
             score_cfg,
             device=score_device,
             dtype=score_dtype,
+            attribute_tokens=index_cfg.attribute_tokens,
         )
 
         collect_gradients(**kwargs)
@@ -301,7 +319,7 @@ def score_worker(
 
             kwargs["scorer"] = create_scorer(
                 index_cfg.partial_run_path / f"shard-{shard_id:05d}",
-                len(ds_shard),
+                ds_shard,
                 query_grads,
                 score_cfg,
                 device=score_device,

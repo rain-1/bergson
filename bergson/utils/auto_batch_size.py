@@ -1,345 +1,263 @@
-"""
-In-memory auto batch size determination for Bergson benchmarks.
-
-This module provides utilities to automatically find the optimal token_batch_size
-that fits in GPU memory for already-loaded models and datasets.
-
-Main function: find_optimal_token_batch_size()
-- Call this with your loaded model, tokenizer, and dataset
-- Returns optimal token_batch_size that fits in memory
-
-Adapted from HuggingFace Accelerate's find_executable_batch_size utility.
-"""
-
 import gc
 import json
+from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import torch
-from datasets import Dataset
-from transformers import PreTrainedModel, PreTrainedTokenizer
+import torch.distributed as dist
+from datasets import Dataset, IterableDataset
+from transformers import PreTrainedModel
 
-from bergson.collector.collector import CollectorComputer
-from bergson.collector.in_memory_collector import InMemoryCollector
-from bergson.config import DataConfig, IndexConfig
-from bergson.data import allocate_batches, tokenize
+from bergson.config import IndexConfig
 from bergson.gradients import GradientProcessor
 
-
-def should_reduce_batch_size(exception: Exception) -> bool:
-    """Check if exception relates to out-of-memory errors or batch size issues."""
-    _statements = [
-        " out of memory.",
-        "cuDNN error: CUDNN_STATUS_NOT_SUPPORTED.",
-        "DefaultCPUAllocator: can't allocate memory",
-        "FATAL ERROR :: MODULE:PT_DEVMEM Allocation failed",
-        # Catches "Token batch size X exceeds model's max sequence length"
-        "Token batch size",
-        # Catches "distributed worker error or insufficient documents"
-        "insufficient documents",
-    ]
-    if isinstance(exception, RuntimeError) and len(exception.args) == 1:
-        return any(err in exception.args[0] for err in _statements)
-    return False
+if TYPE_CHECKING:
+    from bergson.collector.gradient_collectors import (
+        HookCollectorBase,
+    )
 
 
-def clear_device_cache(garbage_collection: bool = False) -> None:
-    """Clear device cache and optionally run garbage collection."""
-    if garbage_collection:
-        gc.collect()
+def maybe_auto_batch_size(
+    cfg: IndexConfig,
+    model: PreTrainedModel,
+    ds: Dataset | IterableDataset,
+    processor: GradientProcessor,
+    target_modules: set[str] | None,
+    rank: int = 0,
+) -> None:
+    """Run auto batch size determination if enabled.
+
+    Mutates ``cfg.token_batch_size`` in place. Only rank 0
+    runs the search; other ranks wait at a gloo barrier then
+    read the cached result.
+    """
+    if not cfg.auto_batch_size:
+        return
+
+    from bergson.collector.gradient_collectors import (
+        GradientCollector,
+    )
+
+    # Create gloo group before the search so all ranks
+    # participate in this collective call together.
+    if dist.is_initialized():
+        gloo_group = dist.new_group(backend="gloo")
+    else:
+        gloo_group = None
+
+    if rank == 0:
+        # skip_index=True avoids creating a Builder, whose
+        # create_index() calls dist.barrier() on the default
+        # NCCL group — which would deadlock since only rank 0
+        # creates this collector.
+        probe_cfg = replace(cfg, skip_index=True)
+        cfg.token_batch_size = determine_batch_size(
+            root=Path(".cache"),
+            cfg=cfg,
+            model=model,
+            collector=GradientCollector(
+                model=model.base_model,
+                cfg=probe_cfg,
+                processor=processor,
+                target_modules=target_modules,
+                data=ds,  # type: ignore
+                scorer=None,
+                reduce_cfg=None,
+            ),
+            starting_batch_size=cfg.token_batch_size,
+        )
+
+    if gloo_group is not None:
+        dist.barrier(group=gloo_group)  # type: ignore
+        dist.destroy_process_group(gloo_group)  # type: ignore
+
+        if rank != 0:
+            cache_path = Path(".cache") / "batch_size_cache.jsonl"
+            metadata = _get_system_metadata(cfg)
+            cached = _check_cache(cache_path, metadata)
+            assert cached is not None, "Cache missing after barrier"
+            cfg.token_batch_size = cached
+            print(f"[rank {rank}] Loaded token_batch_size" f" from cache: {cached}")
+
+
+def _clear_cache() -> None:
+    """Aggressively clear memory."""
+    gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
 
-def round_to_power_of_2(n: int) -> int:
-    """Round down to the nearest power of 2."""
-    if n <= 0:
-        return 1
-    power = 1
-    while power * 2 <= n:
-        power *= 2
-    return power
+def _get_system_metadata(cfg: IndexConfig) -> Dict[str, Any]:
+    """Identify the current hardware and model configuration."""
+    gpu_name = "cpu"
+    gpu_mem = 0.0
 
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
 
-def save_batch_size_cache(
-    cache_path: Path, model_name: str, token_batch_size: int, fsdp: bool = False
-) -> None:
-    """Save optimal token_batch_size to cache file."""
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cache_data = {
-        "model_name": model_name,
-        "token_batch_size": token_batch_size,
-        "fsdp": fsdp,
-        "gpu_name": (
-            torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-        ),
-        "gpu_memory_gb": (
-            torch.cuda.get_device_properties(0).total_memory / 1e9
-            if torch.cuda.is_available()
-            else None
-        ),
+    return {
+        "model": cfg.model,
+        "fsdp": cfg.fsdp,
+        "precision": cfg.precision,
+        "projection_dim": cfg.projection_dim,
+        "reshape_to_square": cfg.reshape_to_square,
+        "gpu_name": gpu_name,
+        "gpu_memory_gb": round(gpu_mem, 1),
     }
 
-    with open(cache_path, "w") as f:
-        json.dump(cache_data, f, indent=2)
 
-    print(f"Saved batch size cache to {cache_path}")
-
-
-def load_batch_size_cache(
-    cache_path: Path, model_name: str, fsdp: bool = False
-) -> Optional[int]:
-    """Load optimal token_batch_size from cache if available and valid."""
-    if not cache_path.exists():
+def _check_cache(cache_file: Path, current_meta: Dict[str, Any]) -> Optional[int]:
+    """Read JSONL file and look for a matching configuration."""
+    if not cache_file.exists():
         return None
 
     try:
-        with open(cache_path, "r") as f:
-            cache_data = json.load(f)
-
-        # Verify cache is for the same configuration
-        if cache_data.get("model_name") != model_name:
-            print(
-                f"Cache model mismatch: {cache_data.get('model_name')} != {model_name}"
-            )
-            return None
-
-        if cache_data.get("fsdp") != fsdp:
-            print(f"Cache FSDP mismatch: {cache_data.get('fsdp')} != {fsdp}")
-            return None
-
-        # Check if GPU matches (optional warning)
-        if torch.cuda.is_available():
-            current_gpu = torch.cuda.get_device_name(0)
-            cached_gpu = cache_data.get("gpu_name")
-            if cached_gpu and cached_gpu != current_gpu:
-                print(f"Warning: GPU changed from {cached_gpu} to {current_gpu}")
-                print("Cached batch size may not be optimal for this GPU")
-
-        token_batch_size = cache_data.get("token_batch_size")
-        if token_batch_size and isinstance(token_batch_size, int):
-            print(
-                f"Loaded cached token_batch_size={token_batch_size} from {cache_path}"
-            )
-            return token_batch_size
-
+        with open(cache_file, "r") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                    if all(row.get(k) == v for k, v in current_meta.items()):
+                        return row.get("token_batch_size")
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
         return None
 
-    except Exception as e:
-        print(f"Failed to load batch size cache: {e}")
-        return None
+    return None
 
 
-def find_optimal_token_batch_size_raw(
-    test_fn: Callable[[int], None],
-    starting_batch_size: int = 4096,
-    round_to_pow2: bool = True,
-    max_batch_size: Optional[int] = None,
-) -> int:
-    """
-    Find optimal token_batch_size by testing with progressively larger/smaller sizes.
+def _append_to_cache(
+    cache_file: Path, current_meta: Dict[str, Any], batch_size: int
+) -> None:
+    """Append a new row to the JSONL cache file."""
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
 
-    Args:
-        test_fn: Function that takes token_batch_size and performs a test pass
-        starting_batch_size: Initial token_batch_size to try
-        round_to_pow2: Round final batch size down to nearest power of 2
-        max_batch_size: Maximum batch size to try (e.g., model's max sequence length)
+    entry = current_meta.copy()
+    entry["token_batch_size"] = batch_size
 
-    Returns:
-        Optimal token_batch_size that fits in memory
-    """
-    token_batch_size = starting_batch_size
-    successful_batch_size = None
-    iteration = 0
+    with open(cache_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
-    clear_device_cache(garbage_collection=True)
-
-    while True:
-        iteration += 1
-        if token_batch_size < 128:
-            if successful_batch_size is not None:
-                break
-            raise RuntimeError(
-                f"No executable token_batch_size found, reached minimum (128). "
-                f"Started from {starting_batch_size}."
-            )
-
-        try:
-            print(
-                f"[Iteration {iteration}] Trying token_batch_size={token_batch_size}..."
-            )
-            test_fn(token_batch_size)
-            successful_batch_size = token_batch_size
-            print(
-                f"✓ [Iteration {iteration}] "
-                f"token_batch_size={token_batch_size} succeeded"
-            )
-
-            # Try larger batch size
-            next_size = int(token_batch_size * 1.5)
-            # Cap at model's max sequence length if specified
-            if max_batch_size is not None:
-                next_size = min(next_size, max_batch_size)
-            # Cap at a reasonable max (1M tokens) to avoid infinite growth
-            if next_size > token_batch_size and token_batch_size < 1_000_000:
-                token_batch_size = next_size
-                clear_device_cache(garbage_collection=True)
-                continue
-            else:
-                break
-
-        except Exception as e:
-            if should_reduce_batch_size(e):
-                print(
-                    f"✗ [Iteration {iteration}] "
-                    f"token_batch_size={token_batch_size} failed (OOM)"
-                )
-                clear_device_cache(garbage_collection=True)
-                token_batch_size = int(token_batch_size * 0.7)
-
-                if successful_batch_size is not None:
-                    break
-            else:
-                raise
-
-    if successful_batch_size is None:
-        raise RuntimeError("Could not find a working token_batch_size")
-
-    final_batch_size = successful_batch_size
-    if round_to_pow2:
-        final_batch_size = round_to_power_of_2(successful_batch_size)
-        print(f"Rounded {successful_batch_size} → {final_batch_size} (power of 2)")
-
-    print(f"\n{'='*60}")
-    print(f"Optimal token_batch_size found: {final_batch_size}")
-    print(f"{'='*60}\n")
-
-    return final_batch_size
+    print(f"Cached batch size {batch_size} to {cache_file}")
 
 
-def find_optimal_token_batch_size(
+def _try_validate(
     model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    dataset: Dataset,
-    starting_batch_size: int = 4096,
+    token_budget: int,
+    collector: "HookCollectorBase",
+) -> bool:
+    """
+    Returns True if the token budget fits, False otherwise.
+
+    The token budget is split into multiple sequences of
+    at most max_position_embeddings tokens, matching how
+    batches are actually packed at runtime.
+    """
+    _clear_cache()
+
+    # Worst case VRAM usage is with maximally long sequences due to
+    # O(N^2) attention
+    max_seq_len = getattr(model.config, "max_position_embeddings", None)
+    if max_seq_len is not None and max_seq_len > 0:
+        seq_len = min(token_budget, max_seq_len)
+    else:
+        seq_len = token_budget
+    num_seqs = max(1, token_budget // seq_len)
+
+    try:
+        input_ids = torch.randint(
+            0,
+            10,
+            (num_seqs, seq_len),
+            device=model.device,
+            dtype=torch.long,
+        )
+        labels = torch.randint(
+            0,
+            10,
+            (num_seqs, seq_len),
+            device=model.device,
+            dtype=torch.long,
+        )
+
+        with collector:
+            logits = model(input_ids).logits
+            shift_logits = logits[:, :-1].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+            loss = torch.nn.functional.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+            )
+            loss.backward()
+            model.zero_grad()
+
+        return True
+
+    except (RuntimeError, ValueError, torch.cuda.OutOfMemoryError):
+        return False
+    finally:
+        model.zero_grad(set_to_none=True)
+        _clear_cache()
+
+
+def determine_batch_size(
+    root: Path,
+    cfg: IndexConfig,
+    model: PreTrainedModel,
+    collector: "HookCollectorBase",
+    starting_batch_size: int = 8192,
 ) -> int:
     """
-    Determine optimal token_batch_size for loaded models and data.
+    Finds the largest viable token batch size that fits in memory.
 
-    This function assumes the model, tokenizer, and dataset are already loaded
-    and ready to use. It will test different batch sizes to find the optimal
-    token_batch_size that fits in available memory.
-
-    Args:
-        model: Already loaded and initialized model
-        tokenizer: Already loaded tokenizer
-        dataset: Small test dataset (already loaded)
-        starting_batch_size: Starting batch size to test
-
-    Returns:
-        Optimal token_batch_size (power of 2)
+    Uses an exponential search to find bounds, then binary search
+    to refine. Results are cached to a JSONL file.
     """
-    print("\n" + "=" * 60)
-    print("Finding optimal token_batch_size for loaded model...")
-    print("=" * 60 + "\n")
+    cache_path = root / "batch_size_cache.jsonl"
+    metadata = _get_system_metadata(cfg)
 
-    # Cap starting batch size to model's max sequence length
-    max_seq_len = getattr(model.config, "max_position_embeddings", None)
-    if max_seq_len is not None and starting_batch_size > max_seq_len:
-        print(
-            f"Capping starting_batch_size from {starting_batch_size} "
-            f"to model's max sequence length {max_seq_len}"
-        )
-        starting_batch_size = max_seq_len
+    cached_size = _check_cache(cache_path, metadata)
+    if cached_size is not None:
+        print(f"Loaded token_batch_size from cache: {cached_size}")
+        return cached_size
 
-    processor = GradientProcessor(
-        normalizers={},
-        projection_dim=None,
-        reshape_to_square=False,
-        projection_type="rademacher",
-    )
+    print("Determining optimal batch size...")
 
-    def test_batch_size(token_batch_size: int) -> None:
-        """Test function that tries a single forward/backward pass."""
-        test_dataset = dataset.select(range(min(5, len(dataset))))
+    # Phase 1: exponential search to find bounds [lo, hi]
+    lo, hi = None, None
+    current_size = starting_batch_size
 
-        test_dataset = test_dataset.map(
-            tokenize,
-            batched=True,
-            fn_kwargs=dict(args=DataConfig(truncation=True), tokenizer=tokenizer),
-        )
-        test_dataset.set_format(
-            type="torch", columns=["input_ids", "attention_mask", "labels", "length"]
-        )
+    while current_size >= 16:
+        print(f"  Testing {current_size}...", end=" ", flush=True)
+        if _try_validate(model, current_size, collector):
+            print("fits")
+            lo = current_size
+            current_size *= 2
+        else:
+            print("OOM")
+            hi = current_size
+            if lo is not None:
+                break
+            current_size //= 2
 
-        index_cfg = IndexConfig(
-            run_path="temp",
-            model="test",
-            token_batch_size=token_batch_size,
-            loss_fn="ce",
-            loss_reduction="mean",
-        )
+    if lo is None:
+        raise RuntimeError("Could not fit even token_batch_size=16 in memory.")
 
-        test_collector = InMemoryCollector(
-            model=model.base_model,  # type: ignore
-            processor=processor,
-            data=test_dataset,
-            cfg=index_cfg,
-        )
+    # Phase 2: binary search between lo and hi
+    if hi is not None:
+        while hi - lo > max(256, lo // 16):
+            mid = (lo + hi) // 2
+            print(f"  Testing {mid}...", end=" ", flush=True)
+            if _try_validate(model, mid, collector):
+                print("fits")
+                lo = mid
+            else:
+                print("OOM")
+                hi = mid
 
-        batches = allocate_batches(test_dataset["length"], token_batch_size)  # type: ignore
+    print(f"Optimal batch size: {lo}")
+    _append_to_cache(cache_path, metadata, lo)
 
-        computer = CollectorComputer(
-            model=model,
-            data=test_dataset,
-            collector=test_collector,
-            batches=batches,
-            cfg=index_cfg,
-        )
-        computer.run_with_collector_hooks(desc="batch size test")
-
-    # Get max sequence length from model config
-    max_seq_len = getattr(model.config, "max_position_embeddings", None)
-
-    return find_optimal_token_batch_size_raw(
-        test_fn=test_batch_size,
-        starting_batch_size=starting_batch_size,
-        round_to_pow2=True,
-        max_batch_size=max_seq_len,
-    )
-
-
-def get_optimal_batch_size(
-    cache_path: Path,
-    model_hf_id: str,
-    fsdp: bool,
-    determine_fn: Callable[[], int],
-) -> int:
-    """
-    Get optimal batch size from cache or determine it.
-
-    Args:
-        cache_path: Path to cache file
-        model_hf_id: HuggingFace model ID
-        fsdp: Whether FSDP is enabled
-        starting_batch_size: Starting batch size for determination
-        determine_fn: Function to determine batch size if not cached
-
-    Returns:
-        Optimal token_batch_size
-    """
-    # Try to load from cache
-    cached_batch_size = load_batch_size_cache(cache_path, model_hf_id, fsdp)
-
-    if cached_batch_size is not None:
-        return cached_batch_size
-
-    # Determine optimal batch size
-    optimal_batch_size = determine_fn()
-
-    # Save to cache
-    save_batch_size_cache(cache_path, model_hf_id, optimal_batch_size, fsdp)
-
-    return optimal_batch_size
+    return lo

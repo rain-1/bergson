@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.5.2 (2026-02-17)
+
+### Bug Fixes
+
+- Pass batches to CollectorComputer in fit_normalizers
+  ([`c95d5d4`](https://github.com/EleutherAI/bergson/commit/c95d5d498ad900af8a95902535fdfe740696088f))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Continuous Integration
+
+- Improve Claude workflows (fetch-depth, timeout, max-turns, pip install)
+  ([`7a315e5`](https://github.com/EleutherAI/bergson/commit/7a315e58758fac24f76400043eeac559380a2952))
+
+- Run tests and typechecking in parallel
+  ([`e690fc0`](https://github.com/EleutherAI/bergson/commit/e690fc0bed99ff5e705e8e82d790e961f3ceba33))
+
+
 ## v0.5.1 (2026-01-30)
 
 ### Bug Fixes

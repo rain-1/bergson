@@ -14,7 +14,7 @@ from tqdm import tqdm
 from bergson.config import FaissConfig
 
 if TYPE_CHECKING:
-    import faiss  # noqa: F401
+    import faiss  # noqa: F401  # pyright: ignore[reportMissingImports]
 
 
 class Index(Protocol):
