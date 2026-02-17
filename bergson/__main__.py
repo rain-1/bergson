@@ -171,11 +171,12 @@ class Trackstar:
         validate_run_path(query_precond_cfg)
         build(query_precond_cfg)
 
-        # Step 3: Build query dataset index without preconditioners
-        print("Step 3/4: Building query dataset index...")
+        # Step 3: Build per-item query gradient index
+        print("Step 3/4: Building query gradient index...")
         query_cfg = deepcopy(self.index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = self.trackstar_cfg.query
+        query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
         validate_run_path(query_cfg)
         build(query_cfg)
