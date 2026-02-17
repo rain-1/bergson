@@ -6,6 +6,7 @@ datasets (up to 10k samples each). Preconditioners are not recomputed during
 reduce or score.
 """
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,7 +51,7 @@ cmd = [
 ]
 
 print(" ".join(cmd))
-# subprocess.run(cmd, check=True)
+subprocess.run(cmd, check=True)
 
 print(
     "If everything worked, your scores should be in "
