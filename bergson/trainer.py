@@ -1,6 +1,9 @@
+import math
 import os
 import re
 from dataclasses import dataclass, field, fields
+from shutil import rmtree
+from typing import Literal
 
 import torch
 import torch.distributed as dist
@@ -33,8 +36,6 @@ def sorted_checkpoints(folder: str) -> list[tuple[int, str]]:
     checkpoints = []
     for name in os.listdir(folder):
         path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            continue
 
         match = pattern.match(name)
         if match:
@@ -115,6 +116,9 @@ class DataStream:
         for i in range(self.num_batches):
             yield self[i]
 
+    def __len__(self):
+        return self.num_batches
+
     def __reversed__(self):
         for i in reversed(range(self.num_batches)):
             yield self[i]
@@ -180,6 +184,14 @@ class TrainerState:
             path = os.path.join(path, f"rank_{rank}.shard")
 
         torch.save(state_dict, path)
+
+    def detach_(self):
+        for p in self.params.values():
+            p.detach_()
+
+        for t in tree_iter(self.opt_state):
+            if isinstance(t, torch.Tensor) and t.is_floating_point():
+                t.detach_()
 
     @property
     def requires_grad(self) -> bool:
@@ -298,16 +310,20 @@ class Trainer:
         *,
         inplace: bool = False,
         save_dir: str | None = None,
+        save_mode: Literal["linear", "sqrt"] = "linear",
         trace: bool = False,
     ) -> TrainerState:
         # Make sure the save directory exists
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
 
-        for x in data:
+        chunk_size = math.isqrt(len(data)) if save_mode == "sqrt" else 1
+        last_start = len(data) - chunk_size
+
+        for i, x in enumerate(data):
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
             # any updates, step 1 is the state after the first update, etc.
-            if save_dir is not None:
+            if save_dir is not None and (i % chunk_size == 0 or i >= last_start):
                 p = os.path.join(save_dir, f"step_{state.batch_index}.ckpt")
                 state.save(p)
 
@@ -320,11 +336,44 @@ class Trainer:
         ckpt_dir: str,
         data: DataStream,
         bwd_state: BackwardState,
+        *,
+        cleanup: bool = True,
     ) -> BackwardState:
-        ckpts = sorted_checkpoints(ckpt_dir)
+        ckpt_list = sorted_checkpoints(ckpt_dir)
+        expected_idx, _ = ckpt_list[-1]
 
-        for _, path in reversed(ckpts):
+        while ckpt_list:
+            idx, path = ckpt_list[-1]
             state_i = TrainerState.load(path)
+
+            # Only delete this checkpoint if it's the one we expected to load. If it's
+            # not, we need to keep it around, and step forward through training
+            if idx == expected_idx:
+                del ckpt_list[-1]
+                if cleanup:
+                    rmtree(path) if os.path.isdir(path) else os.remove(path)
+
+            # Step forward in training if needed
+            while idx < expected_idx:
+                state_i = self.step(
+                    state_i,
+                    data[state_i.batch_index],
+                    trace=False,
+                )
+                idx += 1
+
+                # Save checkpoints for states we will need later
+                if idx < expected_idx:
+                    path = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
+                    ckpt_list.append((idx, path))
+                    state_i.save(path)
+
+                state_i.detach_()
+                state_i.requires_grad = True
+
+            # The index we expect on the next iteration is one less than the current
+            expected_idx = idx - 1
+
             state_i.requires_grad = True
             data.requires_grad = True
 
@@ -364,6 +413,7 @@ class Trainer:
             del result[: len(p_keys)]
 
             weight_grads = result[-1] + w_grads
+            # print(f"Batch {state_i.batch_index} weight grads: {weight_grads}")
             bwd_state = BackwardState(param_grads, result[:-1], weight_grads)
 
         return bwd_state

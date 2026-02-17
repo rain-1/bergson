@@ -128,9 +128,18 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         dataset, processor, batch_size=8, num_batches=50, device=f"cuda:{rank}"
     )
     folder = "/mnt/ssd-1/nora/bergson/checkpoints"
-    state = trainer.train(state, stream, trace=True, save_dir=folder)
+    state = trainer.train(
+        state,
+        stream,
+        trace=True,
+        save_dir=folder,
+        save_mode="sqrt",
+    )
 
-    loss = trainer.evaluate(state, stream[49])
+    ex = stream[49]
+    del ex["example_weight"]
+
+    loss = trainer.evaluate(state, ex)
     grads = grad_tree(loss, {"example_weight": stream.weights})
     scores = grads["example_weight"]
     if world_size > 1:
@@ -139,7 +148,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         print(f"Scores: {scores.tolist()}")
 
     # Manual checkpointed backward using the saved states
-    loss = trainer.evaluate(state, stream[49])
+    loss = trainer.evaluate(state, ex)
     bwd_state = state.backward(loss, torch.zeros_like(stream.weights))
     stream.requires_grad = True
 
@@ -147,8 +156,8 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     if world_size > 1:
         dist.all_reduce(bwd_state.weight_grads)
     if global_rank == 0:
-        print(f"Score diffs: {(bwd_state.weight_grads - scores).tolist()}")
         print(f"Scores 2: {bwd_state.weight_grads.tolist()}")
+        print(f"Difference: {(scores - bwd_state.weight_grads).tolist()}")
 
     # Each rank has only used a fraction of all the example weights. For each rank,
     # weights that it didn't use have zero gradient. We sum across all ranks to get
