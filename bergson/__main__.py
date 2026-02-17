@@ -149,36 +149,49 @@ class Trackstar:
     def execute(self):
         """Run the full trackstar pipeline: preconditioners -> reduce -> score."""
         run_path = self.index_cfg.run_path
-        precond_path = f"{run_path}/preconditioner"
+        value_precond_path = f"{run_path}/value_preconditioner"
+        query_precond_path = f"{run_path}/query_preconditioner"
         query_path = f"{run_path}/query"
         scores_path = f"{run_path}/scores"
 
-        # Step 1: Compute preconditioners on value dataset
-        print("Step 1/3: Computing preconditioners on value dataset...")
-        precond_cfg = deepcopy(self.index_cfg)
-        precond_cfg.run_path = precond_path
-        precond_cfg.skip_index = True
-        precond_cfg.skip_preconditioners = False
-        validate_run_path(precond_cfg)
-        build(precond_cfg)
+        # Step 1: Compute normalizers and preconditioners on value dataset
+        print("Step 1/4: Computing normalizers and preconditioners on value dataset...")
+        value_precond_cfg = deepcopy(self.index_cfg)
+        value_precond_cfg.run_path = value_precond_path
+        value_precond_cfg.skip_index = True
+        value_precond_cfg.skip_preconditioners = False
+        validate_run_path(value_precond_cfg)
+        build(value_precond_cfg)
 
-        # Step 2: Reduce query dataset using pre-computed processor
-        print("Step 2/3: Reducing query dataset...")
+        # Step 2: Compute normalizers and preconditioners on query dataset
+        print("Step 2/4: Computing normalizers and preconditioners on query dataset...")
+        query_precond_cfg = deepcopy(self.index_cfg)
+        query_precond_cfg.run_path = query_precond_path
+        query_precond_cfg.data = self.trackstar_cfg.query
+        query_precond_cfg.skip_index = True
+        query_precond_cfg.skip_preconditioners = False
+        validate_run_path(query_precond_cfg)
+        build(query_precond_cfg)
+
+        # Step 3: Reduce query dataset using query processor
+        print("Step 3/4: Reducing query dataset...")
         query_cfg = deepcopy(self.index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = self.trackstar_cfg.query
-        query_cfg.processor_path = precond_path
+        query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
         validate_run_path(query_cfg)
         reduce(query_cfg, self.reduce_cfg)
 
-        # Step 3: Score value dataset against query
-        print("Step 3/3: Scoring value dataset...")
+        # Step 4: Score value dataset against query using both preconditioners
+        print("Step 4/4: Scoring value dataset...")
         score_index_cfg = deepcopy(self.index_cfg)
         score_index_cfg.run_path = scores_path
-        score_index_cfg.processor_path = precond_path
+        score_index_cfg.processor_path = value_precond_path
         score_index_cfg.skip_preconditioners = True
         self.score_cfg.query_path = query_path
+        self.score_cfg.query_preconditioner_path = query_precond_path
+        self.score_cfg.index_preconditioner_path = value_precond_path
         validate_run_path(score_index_cfg)
         score_dataset(score_index_cfg, self.score_cfg)
 

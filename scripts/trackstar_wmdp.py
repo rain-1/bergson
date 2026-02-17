@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Example: score pile-10k against mean WMDP bio gradients using trackstar.
 
-Uses adafactor normalizers and preconditioners. Preconditioners are computed
-once on the value dataset and reused for reduce and score (no preconditioners
-are computed during those steps).
+Computes adafactor normalizers and preconditioners on both query and value
+datasets (up to 10k samples each). Preconditioners are not recomputed during
+reduce or score.
 """
 
 import subprocess
@@ -19,6 +19,8 @@ cmd = [
     "EleutherAI/pythia-160m",
     "--normalizer",
     "adafactor",
+    "--stats_sample_size",
+    "10000",
     # Value dataset
     "--data.dataset",
     "NeelNanda/pile-10k",
