@@ -12,7 +12,7 @@ from torch import Tensor, nn
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder
+from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -103,7 +103,7 @@ class InMemoryCollector(HookCollectorBase):
         # Create in-memory builder when not scoring
         if self.builder is None and self.scorer is None:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = Builder(
+            self.builder = create_builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,

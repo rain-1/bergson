@@ -185,38 +185,11 @@ class TokenGradients:
 class Builder(ABC):
     """Interface for gradient index writers.
 
-    Calling ``Builder(...)`` directly dispatches to the appropriate
-    concrete subclass based on *attribute_tokens* and *path*:
-
-    * ``path`` given + ``attribute_tokens`` → :class:`TokenBuilder`
-    * ``path`` given                        → :class:`SequenceBuilder`
-    * no ``path`` + ``attribute_tokens``    → :class:`InMemoryTokenBuilder`
-    * no ``path``                           → :class:`InMemorySequenceBuilder`
+    Use :func:`create_builder` to construct the appropriate concrete
+    subclass based on *attribute_tokens* and *path*.
     """
 
     grad_buffer: np.ndarray
-
-    def __new__(
-        cls,
-        data: Dataset,
-        grad_sizes: dict[str, int],
-        dtype: torch.dtype,
-        *,
-        attribute_tokens: bool = False,
-        path: Path | None = None,
-        reduce_cfg: ReduceConfig | None = None,
-    ):
-        if cls is not Builder:
-            return super().__new__(cls)
-
-        if path is not None:
-            subcls = TokenBuilder if attribute_tokens else SequenceBuilder
-        else:
-            subcls = (
-                InMemoryTokenBuilder if attribute_tokens else InMemorySequenceBuilder
-            )
-
-        return super().__new__(subcls)
 
     @abstractmethod
     def __call__(
@@ -225,11 +198,12 @@ class Builder(ABC):
         mod_grads: dict[str, torch.Tensor],
     ) -> None: ...
 
-    @abstractmethod
-    def flush(self) -> None: ...
+    def flush(self) -> None:
+        if isinstance(self.grad_buffer, np.memmap):
+            self.grad_buffer.flush()
 
-    @abstractmethod
-    def dist_reduce(self) -> None: ...
+    def dist_reduce(self) -> None:
+        pass
 
 
 class TokenBuilder(Builder):
@@ -298,13 +272,6 @@ class TokenBuilder(Builder):
                 )
                 row += sl
             col_offset += dim
-
-    def flush(self):
-        self.grad_buffer.flush()
-
-    def dist_reduce(self):
-        # Token-level gradients don't support reduction.
-        pass
 
 
 class InMemorySequenceBuilder(Builder):
@@ -413,9 +380,6 @@ class InMemorySequenceBuilder(Builder):
             ] = tensor_to_numpy(mod_grads[module_name])
             offset += dim
 
-    def flush(self):
-        pass
-
     def dist_reduce(self):
         if self.reduce_cfg is None:
             return
@@ -511,12 +475,6 @@ class InMemoryTokenBuilder(Builder):
                 ] = g_np[row : row + sl]
                 row += sl
             col_offset += dim
-
-    def flush(self):
-        pass
-
-    def dist_reduce(self):
-        pass
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -867,8 +825,6 @@ class SequenceBuilder(Builder):
 
     num_items: int
 
-    grad_buffer: np.memmap
-
     reduce_cfg: ReduceConfig | None
 
     def __init__(
@@ -947,9 +903,6 @@ class SequenceBuilder(Builder):
                 ] = tensor_to_numpy(mod_grads[module_name])
                 offset += mod_grads[module_name].shape[1]
 
-    def flush(self):
-        self.grad_buffer.flush()
-
     def dist_reduce(self):
         if self.reduce_cfg is None:
             return
@@ -973,6 +926,39 @@ class SequenceBuilder(Builder):
             )
 
         self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
+
+
+def create_builder(
+    data: Dataset,
+    grad_sizes: dict[str, int],
+    dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
+    path: Path | None = None,
+    reduce_cfg: ReduceConfig | None = None,
+) -> Builder:
+    """Create the appropriate :class:`Builder` subclass.
+
+    Dispatches based on *attribute_tokens* and *path*:
+
+    * ``path`` given + ``attribute_tokens`` → :class:`TokenBuilder`
+    * ``path`` given                        → :class:`SequenceBuilder`
+    * no ``path`` + ``attribute_tokens``    → :class:`InMemoryTokenBuilder`
+    * no ``path``                           → :class:`InMemorySequenceBuilder`
+    """
+    if path is not None:
+        cls = TokenBuilder if attribute_tokens else SequenceBuilder
+    else:
+        cls = InMemoryTokenBuilder if attribute_tokens else InMemorySequenceBuilder
+
+    return cls(
+        data,
+        grad_sizes,
+        dtype,
+        attribute_tokens=attribute_tokens,
+        path=path,
+        reduce_cfg=reduce_cfg,
+    )
 
 
 def pad_and_tensor(

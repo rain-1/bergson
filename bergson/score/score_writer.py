@@ -1,6 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 import ml_dtypes  # noqa: F401  # register bfloat16 dtype with numpy
 import numpy as np
@@ -16,6 +17,8 @@ class ScoreWriter(ABC):
     """
     Base class for score writers.
     """
+
+    scores: Any
 
     @abstractmethod
     def __call__(
