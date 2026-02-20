@@ -350,7 +350,9 @@ class Trainer:
             # not, we need to keep it around, and step forward through training
             if idx == expected_idx:
                 del ckpt_list[-1]
-                if cleanup:
+
+                # Only delete on the main rank
+                if cleanup and (not dist.is_initialized() or dist.get_rank() == 0):
                     rmtree(path) if os.path.isdir(path) else os.remove(path)
 
             # Step forward in training if needed
@@ -413,7 +415,6 @@ class Trainer:
             del result[: len(p_keys)]
 
             weight_grads = result[-1] + w_grads
-            # print(f"Batch {state_i.batch_index} weight grads: {weight_grads}")
             bwd_state = BackwardState(param_grads, result[:-1], weight_grads)
 
         return bwd_state

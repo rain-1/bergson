@@ -18,49 +18,16 @@ from transformers import (
 
 from bergson.distributed import (
     dist_main,
-    grad_tree,
     simple_fsdp,
 )
 from bergson.math import weighted_causal_lm_ce
 from bergson.models import ResNetCIFAR
 from bergson.trainer import DataStream, Trainer
 
-BASE = 1e-4
-WARMUP_STEPS = 0
-MODEL_NAME = "EleutherAI/pythia-14m"
+BASE = 1e-5
+WARMUP_STEPS = 10
+MODEL_NAME = "EleutherAI/pythia-70m"
 MODEL_TYPE = "text"
-
-
-@torch.no_grad()
-def shuffle_model_parameters(
-    model: torch.nn.Module,
-    *,
-    generator: torch.Generator | None = None,
-    skip_bias: bool = False,
-):
-    """
-    Randomly permute entries *within each parameter tensor* of a model.
-
-    Preserves per-parameter statistics (mean, variance, norm, histogram),
-    while destroying all structural organization.
-
-    Args:
-        model: nn.Module whose parameters will be shuffled in-place.
-        generator: optional torch.Generator for reproducibility.
-        skip_bias: if True, do not shuffle 1D parameters (often biases / LN).
-    """
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-
-        if skip_bias and param.ndim == 1:
-            continue
-
-        data = param.data
-        flat = data.view(-1)
-
-        perm = torch.randperm(flat.numel(), generator=generator, device=flat.device)
-        flat.copy_(flat[perm])
 
 
 def worker(global_rank: int, rank: int, world_size: int, dataset):
@@ -74,11 +41,6 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
             size=dict(shortest_edge=32),
         )
     else:
-        # Initialize the model, optimizer, and trainer
-        # cfg = GPTNeoXConfig.from_pretrained(MODEL_NAME)
-        # cfg._attn_implementation = "eager"
-
-        # model = GPTNeoXForCausalLM(cfg)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             revision="step0",
@@ -111,7 +73,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     def schedule(step: Numeric) -> Numeric:
         # Warmup phase
         if step < WARMUP_STEPS:
-            return 0.0  # BASE * step / WARMUP_STEPS
+            return 0.0
 
         return BASE
 
@@ -119,84 +81,68 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         schedule,
         betas=(0.95, 0.975),
         eps_root=1e-8,
-        moment_requires_grad=True,
+        # moment_requires_grad=True,
     )
     trainer, state0 = Trainer.initialize(model, opt)
-    state = state0
+    fwd_state = state0
 
     stream = DataStream(
         dataset, processor, batch_size=8, num_batches=50, device=f"cuda:{rank}"
     )
     folder = "/mnt/ssd-1/nora/bergson/checkpoints"
-    state = trainer.train(
-        state,
+    fwd_state = trainer.train(
+        fwd_state,
         stream,
-        trace=True,
         save_dir=folder,
         save_mode="sqrt",
     )
 
+    # Use an arbitrary batch from the dataset as the test example
     ex = stream[49]
     del ex["example_weight"]
 
-    loss = trainer.evaluate(state, ex)
-    grads = grad_tree(loss, {"example_weight": stream.weights})
-    scores = grads["example_weight"]
-    if world_size > 1:
-        dist.all_reduce(scores)
-    if global_rank == 0:
-        print(f"Scores: {scores.tolist()}")
-
-    # Manual checkpointed backward using the saved states
-    loss = trainer.evaluate(state, ex)
-    bwd_state = state.backward(loss, torch.zeros_like(stream.weights))
+    # Compute gradient of the test loss with respect to the final state
+    loss = trainer.evaluate(fwd_state, ex)
+    bwd_state = fwd_state.backward(loss, torch.zeros_like(stream.weights))
     stream.requires_grad = True
+
+    if world_size > 1:
+        dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
     bwd_state = trainer.backward(folder, stream, bwd_state)
     if world_size > 1:
-        dist.all_reduce(bwd_state.weight_grads)
+        dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.AVG)
     if global_rank == 0:
         print(f"Scores 2: {bwd_state.weight_grads.tolist()}")
-        print(f"Difference: {(scores - bwd_state.weight_grads).tolist()}")
-
-    # Each rank has only used a fraction of all the example weights. For each rank,
-    # weights that it didn't use have zero gradient. We sum across all ranks to get
-    # the full gradient.
-    if world_size > 1:
-        dist.all_reduce(scores)
 
     baseline = loss.item()
     if global_rank == 0:
         print(f"Baseline: {baseline}")
-        print("Grad:", scores.sum())
+        print("Grad:", bwd_state.weight_grads.sum())
 
     stream.requires_grad = False
 
     diffs = []
     score_sums = []
 
-    n = len(stream.weights)
-    w = stream.weights  # [-n:]
-    s = scores  # x[-n:]
-
     gen = torch.Generator().manual_seed(42)
-    perm = torch.randperm(n, generator=gen)
+    perm = torch.randperm(len(stream.weights), generator=gen)
     subsets = perm.chunk(100)
 
     for subset in subsets:
-        w.fill_(1.0)
-        w[subset] = 0.0
+        stream.weights.fill_(1.0)
+        stream.weights[subset] = 0.0
 
-        state = state0
+        fwd_state = state0
         for x in stream:
-            state = trainer.step(state, x)
+            fwd_state = trainer.step(fwd_state, x)
 
-        loss = trainer.evaluate(state, stream[49])
+        loss = trainer.evaluate(fwd_state, stream[49])
         if world_size > 1:
-            dist.all_reduce(loss)
+            dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
         diffs.append(baseline - loss.item())
-        score_sums.append(s[subset].sum().item())
+        score_sums.append(bwd_state.weight_grads[subset].sum().item())
 
         corr = spearmanr(diffs, score_sums)
         if global_rank == 0:
