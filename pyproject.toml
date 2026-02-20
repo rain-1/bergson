@@ -22,6 +22,7 @@ dependencies = [
     "simple-parsing",
     "torch",
     "transformers"
+    "torchopt",
 ]
 version = "0.8.0"
 [project.optional-dependencies]

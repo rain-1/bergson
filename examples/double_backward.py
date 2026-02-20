@@ -81,7 +81,6 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         schedule,
         betas=(0.95, 0.975),
         eps_root=1e-8,
-        # moment_requires_grad=True,
     )
     trainer, state0 = Trainer.initialize(model, opt)
     fwd_state = state0
