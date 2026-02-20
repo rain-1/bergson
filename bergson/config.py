@@ -260,6 +260,10 @@ class QueryConfig:
     """Whether to return results in reverse order
     (lowest influences instead of highest)."""
 
+    record: str = ""
+    """Path to a CSV file for recording query results. Each query appends
+    its top results as rows with columns: query, result, result_index, score."""
+
 
 @dataclass
 class ScoreConfig:
@@ -367,3 +371,11 @@ class FaissConfig:
 
     nprobe: int = 10
     """The number of FAISS vector clusters to search if using ANN."""
+
+
+@dataclass
+class TrackstarConfig:
+    """Config for the trackstar pipeline query dataset."""
+
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset specification."""

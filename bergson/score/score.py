@@ -80,45 +80,30 @@ def preprocess_grads(
     normalize_accumulated_grad: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Preprocess the gradients. Returns a dictionary of preprocessed gradients
-    with shape [1, grad_dim]. Preprocessing includes some combination of unit
-    normalization, accumulation, accumulated gradient normalization, and dtype
-    conversion."""
+    with shape [N, grad_dim] or [1, grad_dim]. Preprocessing includes some
+    combination of per-item unit normalization, accumulation, accumulated
+    gradient normalization, and dtype conversion."""
 
     # Short-circuit if possible
     if accumulate_grads == "none" and not unit_normalize:
         return {name: grad_dict[name].to(device=device) for name in grad_column_names}
 
-    num_rows = len(grad_dict[grad_column_names[0]])
+    grads = {
+        name: grad_dict[name].to(device=device, dtype=torch.float32)
+        for name in grad_column_names
+    }
 
-    # Get sum and sum of squares of the gradients
-    acc = {}
-    ss_acc = torch.tensor(0.0, device=device, dtype=torch.float32)
-    if not unit_normalize:
-        ss_acc.fill_(1.0)
+    # Per-item unit normalization
+    if unit_normalize:
+        norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
+        grads = {k: v / norms for k, v in grads.items()}
 
-    for name in grad_column_names:
-        x = grad_dict[name].to(device=device, dtype=torch.float32)
-        acc[name] = x.sum(0)
-        if unit_normalize:
-            ss_acc += x.pow(2).sum()
-
-    ss_acc = ss_acc.sqrt()
-    assert ss_acc > 0, "Sum of squares of entire dataset is zero"
-
-    # Process the gradients
+    # Accumulate across items
     if accumulate_grads == "mean":
-        grads = {
-            name: (acc[name] / ss_acc / num_rows).unsqueeze(0)
-            for name in grad_column_names
-        }
+        grads = {name: grads[name].mean(0, keepdim=True) for name in grad_column_names}
     elif accumulate_grads == "sum":
-        grads = {name: (acc[name] / ss_acc).unsqueeze(0) for name in grad_column_names}
-    elif accumulate_grads == "none":
-        grads = {name: grad_dict[name].to(device=device) for name in grad_column_names}
-        if unit_normalize:
-            norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
-            grads = {k: v / norms for k, v in grads.items()}
-    else:
+        grads = {name: grads[name].sum(0, keepdim=True) for name in grad_column_names}
+    elif accumulate_grads != "none":
         raise ValueError(f"Invalid accumulate_grads: {accumulate_grads}")
 
     # Normalize the accumulated gradient
@@ -173,7 +158,9 @@ def precondition_grads(
         }
 
         grads = {
-            name: (grads[name].to(device) @ h_inv[name]).cpu()
+            name: (
+                grads[name].to(device=device, dtype=h_inv[name].dtype) @ h_inv[name]
+            ).cpu()
             for name in target_modules
         }
 
