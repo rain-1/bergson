@@ -1,5 +1,6 @@
 import os
 import socket
+from contextlib import nullcontext, redirect_stdout
 from typing import Any, Callable
 
 import torch.distributed as dist
@@ -14,7 +15,9 @@ def dist_worker(
     *worker_args,
 ):
     try:
-        worker(*worker_args)
+        rank = int(os.environ.get("RANK", 0))
+        with nullcontext() if rank == 0 else redirect_stdout(None):
+            worker(*worker_args)
     finally:
         if dist.is_initialized():
             try:
