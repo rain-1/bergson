@@ -11,9 +11,10 @@ from torch.distributed.tensor import (
 )
 from torchopt.typing import Numeric
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
     ConvNextImageProcessor,
+    GPTNeoXConfig,
+    GPTNeoXForCausalLM,
 )
 
 from bergson.distributed import (
@@ -26,7 +27,7 @@ from bergson.utils.math import weighted_causal_lm_ce
 
 BASE = 1e-5
 WARMUP_STEPS = 10
-MODEL_NAME = "EleutherAI/pythia-70m"
+MODEL_NAME = "EleutherAI/pythia-1b"
 MODEL_TYPE = "text"
 
 
@@ -41,11 +42,10 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
             size=dict(shortest_edge=32),
         )
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            revision="step0",
-            attn_implementation="eager",
-        )
+        cfg = GPTNeoXConfig.from_pretrained(MODEL_NAME, revision="step0")
+        model = GPTNeoXForCausalLM(cfg)
+        model.set_attn_implementation("eager")
+
         model.loss_function = weighted_causal_lm_ce
         model.to(f"cuda:{rank}")
 
@@ -86,7 +86,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     fwd_state = state0
 
     stream = DataStream(
-        dataset, processor, batch_size=8, num_batches=50, device=f"cuda:{rank}"
+        dataset, processor, batch_size=8, num_batches=100, device=f"cuda:{rank}"
     )
     folder = "/mnt/ssd-1/nora/bergson/checkpoints"
     fwd_state = trainer.train(
