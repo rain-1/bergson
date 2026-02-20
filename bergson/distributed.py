@@ -1,6 +1,6 @@
 import socket
 from collections import defaultdict
-from typing import Callable
+from typing import Callable, Concatenate, ParamSpec
 
 import torch
 import torch.distributed as dist
@@ -140,7 +140,8 @@ def simple_fsdp(model: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
-Worker = Callable[[int, int, int, object], None]
+Args = ParamSpec("Args")
+Worker = Callable[Concatenate[int, int, int, Args], None]
 """A worker function for distributed training."""
 
 
