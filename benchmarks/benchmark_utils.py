@@ -7,7 +7,6 @@ from pathlib import Path
 
 from datasets import Dataset, load_from_disk
 
-from benchmarks.plot_styles import MODEL_COLORS, model_color  # noqa: F401
 from bergson.config import DataConfig, IndexConfig
 from bergson.utils.worker_utils import setup_data_pipeline
 

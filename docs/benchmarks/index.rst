@@ -24,6 +24,13 @@ Projection Comparison
    :alt: Projection Comparison
    :align: center
 
+Factor Computation Overhead
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: factor_benchmark_10k.png
+   :alt: Factor Computation Overhead
+   :align: center
+
 Running Your Own Benchmarks
 ----------------------------
 
