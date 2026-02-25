@@ -736,7 +736,9 @@ def score_attribute_eval(
     data_path = base_path / "data"
 
     # Determine output path - include column names for semantic eval caching
-    is_semantic = eval_prompt_column == "question" and eval_completion_column == "answer"
+    is_semantic = (
+        eval_prompt_column == "question" and eval_completion_column == "answer"
+    )
     col_suffix = "_question_answer" if is_semantic else ""
 
     if preconditioner_name:
@@ -1158,11 +1160,15 @@ def score_attribute_eval_with_pca(
     data_path = base_path / "data"
 
     # Determine output path
-    is_semantic = eval_prompt_column == "question" and eval_completion_column == "answer"
+    is_semantic = (
+        eval_prompt_column == "question" and eval_completion_column == "answer"
+    )
     col_suffix = "_question_answer" if is_semantic else ""
 
     if preconditioner_name:
-        scores_path = base_path / f"scores_pca_k{top_k}_{preconditioner_name}{col_suffix}"
+        scores_path = (
+            base_path / f"scores_pca_k{top_k}_{preconditioner_name}{col_suffix}"
+        )
         precond_path = base_path / preconditioner_name
     else:
         scores_path = base_path / f"scores_pca_k{top_k}{col_suffix}"
@@ -1193,7 +1199,9 @@ def score_attribute_eval_with_pca(
     n_train = len(train_ds)
     n_eval = len(eval_ds)
 
-    print(f"Scoring {n_eval} eval queries against {n_train} train samples (PCA k={top_k})")
+    print(
+        f"Scoring {n_eval} eval queries against {n_train} train samples (PCA k={top_k})"
+    )
 
     # Load train gradients
     print("Loading train gradients...")
@@ -1397,7 +1405,9 @@ def compute_attribute_metrics_with_pca(
     style_only_top1 = style_only_top5 = style_only_top10 = 0
     same_employer_type = same_university_type = 0
 
-    field_top1: dict[str, list[int, int]] = {f: [0, 0] for f in ["employer", "university", "degree", "title"]}
+    field_top1: dict[str, list[int, int]] = {
+        f: [0, 0] for f in ["employer", "university", "degree", "title"]
+    }
 
     for i in range(n_eval):
         query_fact = eval_facts[i]
@@ -2347,7 +2357,9 @@ def run_attribute_preservation_experiment(
                 all_metrics[f"semantic_pca_k{pca_k500}_index"] = metrics
         else:
             print("WARNING: PCA indices not found at runs/precond_comparison/")
-            print("  Run the asymmetric style experiment first to generate PCA subspace.")
+            print(
+                "  Run the asymmetric style experiment first to generate PCA subspace."
+            )
 
     # Print summary comparison
     print("\n" + "=" * 70)
@@ -2386,9 +2398,7 @@ def run_attribute_preservation_experiment(
         "style matches training"
     )
     if include_semantic_eval:
-        print(
-            "  - semantic_*: Eval gradients only from answer tokens (Q&A format)"
-        )
+        print("  - semantic_*: Eval gradients only from answer tokens (Q&A format)")
 
     baseline = all_metrics.get("no_precond")
     r_between = all_metrics.get("r_between")

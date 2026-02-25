@@ -562,9 +562,7 @@ def compute_pca_style_subspace(
         print(f"\n  PCA variance explained (k={top_k}):")
         print(f"    Mean across modules:   {mean_var:.1f}%")
         print(f"    Median across modules: {median_var:.1f}%")
-        print(
-            f"    Modules where k >= dim (capped): {n_capped}/{len(variance_pcts)}"
-        )
+        print(f"    Modules where k >= dim (capped): {n_capped}/{len(variance_pcts)}")
 
     output_path.mkdir(parents=True, exist_ok=True)
     torch.save(style_subspace, cache_file)
@@ -624,7 +622,9 @@ def report_pca_variance(
     if exclude_facts:
         n_before = len(common_facts)
         common_facts = common_facts - exclude_facts
-        print(f"  Excluded {n_before - len(common_facts)} facts to prevent data leakage")
+        print(
+            f"  Excluded {n_before - len(common_facts)} facts to prevent data leakage"
+        )
 
     common_facts_list = list(common_facts)
     pirate_indices = [pirate_fact_to_idx[f] for f in common_facts_list]

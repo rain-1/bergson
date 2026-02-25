@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
+from datasets import DatasetDict, load_dataset, load_from_disk
 
 from examples.semantic.asymmetric import (
     AsymmetricConfig,
@@ -198,10 +198,26 @@ def main():
         orig_results = json.load(f)
 
     comparisons = [
-        ("k=10, no precond", "semantic_pca_projection_k10", "semantic_pca_k10_no_precond_semantic_basis"),
-        ("k=10, H_train", "semantic_pca_k10_index", "semantic_pca_k10_index_semantic_basis"),
-        ("k=100, no precond", "semantic_pca_projection_k100", "semantic_pca_k100_no_precond_semantic_basis"),
-        ("k=100, H_train", "semantic_pca_k100_index", "semantic_pca_k100_index_semantic_basis"),
+        (
+            "k=10, no precond",
+            "semantic_pca_projection_k10",
+            "semantic_pca_k10_no_precond_semantic_basis",
+        ),
+        (
+            "k=10, H_train",
+            "semantic_pca_k10_index",
+            "semantic_pca_k10_index_semantic_basis",
+        ),
+        (
+            "k=100, no precond",
+            "semantic_pca_projection_k100",
+            "semantic_pca_k100_no_precond_semantic_basis",
+        ),
+        (
+            "k=100, H_train",
+            "semantic_pca_k100_index",
+            "semantic_pca_k100_index_semantic_basis",
+        ),
     ]
 
     header = f"{'Condition':<25} {'Full-grad PCA Top-1':<22} {'Semantic PCA Top-1':<22} {'Full Leak':<12} {'Sem Leak':<12}"
