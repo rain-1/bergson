@@ -1,12 +1,14 @@
 import math
 import os
 import re
+from concurrent.futures import Future
 from dataclasses import dataclass, field, fields
 from shutil import rmtree
 from typing import Literal
 
 import torch
 import torch.distributed as dist
+import torch.distributed.checkpoint as dcp
 import torchopt
 from datasets import Dataset
 from torch import nn
@@ -170,21 +172,6 @@ class TrainerState:
         state_dict = torch.load(path, **kwargs, weights_only=False)
         return cls(**state_dict)
 
-    def save(self, path: str):
-        # Convert to dict manually because dataclasses.asdict does a deep copy
-        state_dict = {f.name: getattr(self, f.name) for f in fields(self)}
-
-        # Check to see if we're in distributed mode. If so, we need to save only our
-        # shard of the state.
-        if dist.is_initialized():
-            # Make sure the directory exists
-            os.makedirs(path, exist_ok=True)
-
-            rank = dist.get_rank()
-            path = os.path.join(path, f"rank_{rank}.shard")
-
-        torch.save(state_dict, path)
-
     def detach_(self):
         for p in self.params.values():
             p.detach_()
@@ -236,6 +223,10 @@ class TrainerState:
         ]
         return BackwardState(grads, opt_grads, weight_grads)
 
+    def state_dict(self) -> dict:
+        # Convert to dict manually because dataclasses.asdict does a deep copy
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
 
 class Trainer:
     """Stateless, functional trainer for a model, optimizer, and dataset."""
@@ -273,12 +264,17 @@ class Trainer:
 
         # We keep the model on the meta device, so it's essential we use strict=True
         # to ensure every single parameter is replaced by a real one from the state.
-        outputs = torch.func.functional_call(
-            self.model,
-            (state.params, state.buffers),
-            kwargs=inputs,
-            strict=True,
-        )
+        with torch.autocast(
+            "cuda",
+            dtype=torch.bfloat16,
+            enabled=torch.cuda.is_bf16_supported(),
+        ):
+            outputs = torch.func.functional_call(
+                self.model,
+                (state.params, state.buffers),
+                kwargs=inputs,
+                strict=True,
+            )
 
         # Currently we support two output types: HuggingFace, and "raw loss"
         # - HuggingFace models output a dict/dataclass with a "loss" field
@@ -310,7 +306,7 @@ class Trainer:
         *,
         inplace: bool = False,
         save_dir: str | None = None,
-        save_mode: Literal["linear", "sqrt"] = "linear",
+        save_mode: Literal["linear", "sqrt"] = "sqrt",
         trace: bool = False,
     ) -> TrainerState:
         # Make sure the save directory exists
@@ -320,14 +316,37 @@ class Trainer:
         chunk_size = math.isqrt(len(data)) if save_mode == "sqrt" else 1
         last_start = len(data) - chunk_size
 
+        grp = None
+        save_futures: list[Future] = []
+
         for i, x in enumerate(data):
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
             # any updates, step 1 is the state after the first update, etc.
-            if save_dir is not None and (i % chunk_size == 0 or i >= last_start):
-                p = os.path.join(save_dir, f"step_{state.batch_index}.ckpt")
-                state.save(p)
+            if save_dir and (i % chunk_size == 0 or i >= last_start):
+                p = os.path.join(save_dir, f"step_{i}.ckpt")
+
+                # Create a new process group so that we can overlap saves
+                grp = dist.new_group(backend="gloo", group_desc=f"step_{i}")
+                assert isinstance(grp, dist.ProcessGroup)
+
+                fut = dcp.async_save(
+                    state.state_dict(),
+                    checkpoint_id=p,
+                    process_group=grp,
+                )
+                assert isinstance(fut, Future)
+
+                def callback(_, i=i, p=p, g=grp):
+                    print(f"Checkpoint {i} saved to {p}")
+                    dist.destroy_process_group(g)
+
+                fut.add_done_callback(callback)
+                save_futures.append(fut)
 
             state = self.step(state, x, inplace=inplace, trace=trace)
+
+        for fut in save_futures:
+            fut.result()  # wait for all checkpoints to finish saving
 
         return state
 
@@ -336,15 +355,22 @@ class Trainer:
         ckpt_dir: str,
         data: DataStream,
         bwd_state: BackwardState,
+        fwd_state: TrainerState,
         *,
         cleanup: bool = True,
     ) -> BackwardState:
         ckpt_list = sorted_checkpoints(ckpt_dir)
         expected_idx, _ = ckpt_list[-1]
 
+        save_futures: list[Future] = []
         while ckpt_list:
+            # Make sure everything has been saved
+            for fut in save_futures:
+                fut.result()
+
             idx, path = ckpt_list[-1]
-            state_i = TrainerState.load(path)
+            fwd_state.batch_index = idx
+            dcp.load(fwd_state.state_dict(), checkpoint_id=path)
 
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
@@ -357,9 +383,9 @@ class Trainer:
 
             # Step forward in training if needed
             while idx < expected_idx:
-                state_i = self.step(
-                    state_i,
-                    data[state_i.batch_index],
+                fwd_state = self.step(
+                    fwd_state,
+                    data[fwd_state.batch_index],
                     trace=False,
                 )
                 idx += 1
@@ -368,23 +394,39 @@ class Trainer:
                 if idx < expected_idx:
                     path = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
                     ckpt_list.append((idx, path))
-                    state_i.save(path)
 
-                state_i.detach_()
-                state_i.requires_grad = True
+                    # Create a new process group so that we can overlap saves
+                    grp = dist.new_group(backend="gloo", group_desc=f"step_{idx}")
+                    assert isinstance(grp, dist.ProcessGroup)
+
+                    fut = dcp.async_save(
+                        fwd_state.state_dict(),
+                        checkpoint_id=path,
+                        process_group=grp,
+                    )
+                    assert isinstance(fut, Future)
+
+                    fut.add_done_callback(
+                        lambda _, g=grp: dist.destroy_process_group(g)
+                    )
+                    save_futures.append(fut)
+
+                fwd_state.detach_()
+                fwd_state.requires_grad = True
 
             # The index we expect on the next iteration is one less than the current
             expected_idx = idx - 1
 
-            state_i.requires_grad = True
+            fwd_state.detach_()
+            fwd_state.requires_grad = True
             data.requires_grad = True
 
-            flat_i = state_i.differentiable_tensors()
+            flat_i = fwd_state.differentiable_tensors()
 
             # Re-do the training step
             state_f = self.step(
-                state_i,
-                data[state_i.batch_index],
+                fwd_state,
+                data[fwd_state.batch_index],
                 trace=True,
             )
             # Carefully consume the bwd state to save memory
@@ -416,6 +458,9 @@ class Trainer:
 
             weight_grads = result[-1] + w_grads
             bwd_state = BackwardState(param_grads, result[:-1], weight_grads)
+
+        for fut in save_futures:
+            fut.result()
 
         return bwd_state
 

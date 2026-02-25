@@ -27,7 +27,7 @@ from bergson.utils.math import weighted_causal_lm_ce
 
 BASE = 1e-5
 WARMUP_STEPS = 10
-MODEL_NAME = "EleutherAI/pythia-1b"
+MODEL_NAME = "EleutherAI/pythia-2.8b"
 MODEL_TYPE = "text"
 
 
@@ -58,7 +58,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         port = os.environ.get("MASTER_PORT", "29500")
 
         dist.init_process_group(
-            "nccl",
+            "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(f"cuda:{rank}"),
             rank=rank,
@@ -68,7 +68,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         # Shard the model
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
-            simple_fsdp(model)
+            model = simple_fsdp(model)
 
     def schedule(step: Numeric) -> Numeric:
         # Warmup phase
@@ -88,13 +88,8 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     stream = DataStream(
         dataset, processor, batch_size=8, num_batches=100, device=f"cuda:{rank}"
     )
-    folder = "/mnt/ssd-1/nora/bergson/checkpoints"
-    fwd_state = trainer.train(
-        fwd_state,
-        stream,
-        save_dir=folder,
-        save_mode="sqrt",
-    )
+    folder = "/mnt/ssd-3/nora/magic-ckpts"
+    fwd_state = trainer.train(fwd_state, stream, save_dir=folder)
 
     # Use an arbitrary batch from the dataset as the test example
     ex = stream[49]
@@ -108,7 +103,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     if world_size > 1:
         dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
-    bwd_state = trainer.backward(folder, stream, bwd_state)
+    bwd_state = trainer.backward(folder, stream, bwd_state, fwd_state)
     if world_size > 1:
         dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.AVG)
     if global_rank == 0:
