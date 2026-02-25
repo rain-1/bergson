@@ -12,14 +12,13 @@ Steps:
 4. Re-run semantic PCA conditions with the new subspace
 """
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import subprocess
-
-import torch
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 
 from examples.semantic.asymmetric import (
@@ -27,13 +26,12 @@ from examples.semantic.asymmetric import (
     AsymmetricMetrics,
     compute_asymmetric_metrics_with_pca,
 )
+from examples.semantic.data import HF_ANALYSIS_MODEL
 from examples.semantic.preconditioners import compute_pca_style_subspace
 
 BASE_PATH = Path("runs/asymmetric_style")
 SEMANTIC_IDX_PATH = Path("runs/precond_comparison_semantic")
 DAMPING = 0.1
-MODEL = "tmp/checkpoint-282"
-BERGSON = str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "bergson")
 
 
 def create_semantic_style_datasets() -> tuple[Path, Path]:
@@ -71,7 +69,9 @@ def create_semantic_style_datasets() -> tuple[Path, Path]:
 
 
 def build_semantic_indices(
-    pirate_data: Path, shakespeare_data: Path
+    pirate_data: Path,
+    shakespeare_data: Path,
+    analysis_model: str = HF_ANALYSIS_MODEL,
 ) -> tuple[Path, Path]:
     """Build gradient indices using question/answer columns (semantic only)."""
     SEMANTIC_IDX_PATH.mkdir(parents=True, exist_ok=True)
@@ -87,11 +87,11 @@ def build_semantic_indices(
 
         print(f"Building semantic index for {style_name}...")
         cmd = [
-            BERGSON,
+            "bergson",
             "build",
             str(run_path),
             "--model",
-            MODEL,
+            analysis_model,
             "--dataset",
             str(dataset_path),
             "--drop_columns",
@@ -194,8 +194,6 @@ def main():
     print("=" * 70)
 
     # Load original results for comparison
-    import json
-
     with open(BASE_PATH / "experiment_results.json") as f:
         orig_results = json.load(f)
 

@@ -140,15 +140,7 @@ The unnormalized inner product `g_eval @ H^(-1) @ g_train.T` is the classic infl
 
 **With an AI agent**: Point Claude Code or another AI agent at `skills/asymmetric-style.md` for detailed instructions.
 
-**Recompute the main results table** (most common):
-
-```bash
-python scripts/recompute_table.py
-```
-
-This clears cached scores and recomputes all strategies. It calls `run_asymmetric_experiment()` with specific flags (disabling summed eval, majority control, and summed loss) and separately computes PCA k=100 variants using full-gradient style indices from `runs/precond_comparison/`.
-
-**Run with all defaults** (includes optional strategies like summed eval and majority control):
+**Run the experiment**:
 
 ```python
 from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
@@ -163,7 +155,7 @@ results = run_asymmetric_experiment(
 )
 ```
 
-See `skills/asymmetric-style.md` for additional scripts (`recompute_pca_noleak.py`, `semantic_pca_ablation.py`) and full parameter documentation.
+See `skills/asymmetric-style.md` for full parameter documentation.
 
 ### View Results
 

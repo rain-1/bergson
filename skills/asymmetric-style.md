@@ -6,29 +6,7 @@ This simulates a realistic scenario: your training data is mostly in one style (
 
 ## Usage
 
-There is no CLI interface for this experiment. It is run via Python scripts.
-
-**Recompute the main results table** (the most common operation):
-
-```bash
-python scripts/recompute_table.py
-```
-
-This clears cached scores and recomputes all strategies, including PCA k=100 variants. It calls `run_asymmetric_experiment()` with specific flags and then separately computes PCA k=100 using full-gradient style indices.
-
-**Run PCA ablation with eval fact exclusion** (sweeps k=10, 100, 500):
-
-```bash
-python scripts/recompute_pca_noleak.py
-```
-
-**Run semantic PCA ablation** (PCA from answer-only gradients):
-
-```bash
-python scripts/semantic_pca_ablation.py
-```
-
-**Run all defaults** (includes strategies not in the table, like summed eval and majority control):
+There is no CLI interface for this experiment. It is run via the Python API.
 
 ```python
 from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
@@ -36,6 +14,14 @@ from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricCo
 config = AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style")
 results = run_asymmetric_experiment(config=config, base_path="runs/asymmetric_style")
 ```
+
+**Semantic PCA ablation** (PCA from answer-only gradients instead of full gradients):
+
+```bash
+python scripts/semantic_pca_ablation.py
+```
+
+Tests whether computing the PCA style subspace from semantic (answer-only) gradients gives a cleaner subspace than full gradients. Builds separate semantic gradient indices, then compares results against the full-gradient PCA baseline.
 
 ## What this does
 
@@ -79,7 +65,7 @@ Transform gradients by `g' = g @ H^(-1)` before computing similarity, downweight
 
 ### Optional Strategies (not in main table)
 
-These are available via `run_asymmetric_experiment()` parameters but disabled in the standard `recompute_table.py` run:
+These are available via `run_asymmetric_experiment()` parameters but disabled by default:
 
 - **majority_no_precond**: Query in the majority (shakespeare) style—no style mismatch. Control showing what's achievable when styles match. Enable with `include_majority_control=True`.
 - **summed_eval**: For each query, compute gradients in both styles (pirate + shakespeare), then sum them. Tests whether style-specific components cancel out. Enable with `include_summed_eval=True`.
@@ -87,52 +73,21 @@ These are available via `run_asymmetric_experiment()` parameters but disabled in
 
 ## Instructions
 
-### Recompute the main results table
+### Run the experiment
 
-This is the primary way to reproduce results. The script (`scripts/recompute_table.py`):
+```python
+from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
 
-1. Clears cached scores and `experiment_results.json`
-2. Calls `run_asymmetric_experiment()` with these parameters:
-   ```python
-   run_asymmetric_experiment(
-       config=AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style"),
-       base_path=BASE_PATH,
-       include_pca=True,
-       pca_top_k=10,
-       include_summed_loss=False,
-       include_second_moments=True,
-       include_majority_control=False,
-       include_summed_eval=False,
-       include_semantic_eval=True,
-       damping_factor=0.1,
-   )
-   ```
-3. Separately computes PCA k=100 variants using full-gradient style indices from `runs/precond_comparison/`:
-   ```python
-   style_subspace_k100 = compute_pca_style_subspace(
-       pirate_idx=Path("runs/precond_comparison/pirate"),
-       shakespeare_idx=Path("runs/precond_comparison/shakespeare"),
-       cache_dir=BASE_PATH / "pca_subspace",
-       top_k=100,
-       exclude_facts=eval_facts_to_exclude,
-   )
-   ```
-
-### Run PCA k-value sweep with eval exclusion
-
-```bash
-python scripts/recompute_pca_noleak.py
+results = run_asymmetric_experiment(
+    config=AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style"),
+    base_path="runs/asymmetric_style",
+    include_pca=True,
+    pca_top_k=10,
+    include_second_moments=True,
+    include_semantic_eval=True,
+    damping_factor=0.1,
+)
 ```
-
-This sweeps k=10, 100, 500 with both no preconditioning and H_train, for both full-gradient and semantic-gradient conditions. Results are merged into `experiment_results.json`.
-
-### Run semantic PCA ablation
-
-```bash
-python scripts/semantic_pca_ablation.py
-```
-
-Tests whether computing the PCA style subspace from semantic (answer-only) gradients gives a cleaner subspace than full gradients. Requires building separate semantic gradient indices.
 
 ### Print existing results summary
 
@@ -199,7 +154,7 @@ runs/asymmetric_style/
 - `scores_*/` - Score computation (~10 sec each)
 - `experiment_results.json` - Metrics computed from scores
 
-To recompute scores only (what `recompute_table.py` does):
+To recompute scores only:
 ```bash
 rm -rf runs/asymmetric_style/scores_* runs/asymmetric_style/experiment_results.json
 ```
