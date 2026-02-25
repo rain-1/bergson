@@ -126,6 +126,17 @@ PCA k values and the style index path are configured via `AsymmetricConfig`:
 - `config.pca_k_values`: Tuple of k values to sweep (default: `(10, 100, 500, 1000)`)
 - `config.style_index_path`: Path to style-specific indices (default: `"runs/precond_comparison"`)
 
+Example with custom PCA settings:
+
+```python
+config = AsymmetricConfig(
+    hf_dataset="EleutherAI/bergson-asymmetric-style",
+    pca_k_values=(10, 50, 200),           # custom sweep values
+    style_index_path="runs/my_indices",    # custom style index location
+)
+results = run_asymmetric_experiment(config=config, base_path="runs/asymmetric_style")
+```
+
 ## Cached Data
 
 The experiment caches intermediate results to avoid recomputation:
