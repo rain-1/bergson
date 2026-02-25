@@ -1997,6 +1997,14 @@ def run_asymmetric_experiment(
     print("-" * 60)
     create_asymmetric_index(config, base_path, analysis_model)
 
+    # Load eval facts to exclude from PCA computation (prevent data leakage)
+    data_path = base_path / "data"
+    eval_ds = load_from_disk(str(data_path / "eval.hf"))
+    if isinstance(eval_ds, DatasetDict):
+        eval_ds = eval_ds["train"]
+    eval_facts_to_exclude: set[str] = set(eval_ds["fact"])  # type: ignore[arg-type]
+    print(f"Loaded {len(eval_facts_to_exclude)} eval facts to exclude from PCA")
+
     # Step 2: Compute R_between preconditioner
     print("\n" + "-" * 60)
     print("STEP 2: Computing style suppression preconditioner (R_between)")
@@ -2035,7 +2043,11 @@ def run_asymmetric_experiment(
         shakespeare_idx = Path("runs/precond_comparison/shakespeare")
         if pirate_idx.exists() and shakespeare_idx.exists():
             style_subspace = compute_pca_style_subspace(
-                pirate_idx, shakespeare_idx, base_path / "pca_subspace", top_k=pca_top_k
+                pirate_idx,
+                shakespeare_idx,
+                base_path / "pca_subspace",
+                top_k=pca_top_k,
+                exclude_facts=eval_facts_to_exclude,
             )
         else:
             print("  Style-specific indices not found, skipping PCA projection")
@@ -2186,18 +2198,201 @@ def run_asymmetric_experiment(
         print_metrics(metrics, "semantic_r_between")
         all_metrics["semantic_r_between"] = metrics
 
+        # Semantic + summed_loss preconditioner
+        if include_summed_loss:
+            print("\n--- Strategy: semantic_summed_loss ---")
+            metrics = compute_asymmetric_metrics(
+                config,
+                base_path,
+                "summed_loss",
+                damping_factor=damping_factor,
+                eval_prompt_column="question",
+                eval_completion_column="answer",
+            )
+            print_metrics(metrics, "semantic_summed_loss")
+            all_metrics["semantic_summed_loss"] = metrics
+
+        # Semantic + second moment preconditioners
+        if include_second_moments:
+            print("\n--- Strategy: semantic_eval_second_moment ---")
+            metrics = compute_asymmetric_metrics(
+                config,
+                base_path,
+                "eval_second_moment",
+                damping_factor=damping_factor,
+                eval_prompt_column="question",
+                eval_completion_column="answer",
+            )
+            print_metrics(metrics, "semantic_eval_second_moment")
+            all_metrics["semantic_eval_second_moment"] = metrics
+
+            print("\n--- Strategy: semantic_train_eval_mixed ---")
+            metrics = compute_asymmetric_metrics(
+                config,
+                base_path,
+                "train_eval_mixed",
+                damping_factor=damping_factor,
+                eval_prompt_column="question",
+                eval_completion_column="answer",
+            )
+            print_metrics(metrics, "semantic_train_eval_mixed")
+            all_metrics["semantic_train_eval_mixed"] = metrics
+
+        # Semantic + PCA projection
+        if include_pca and style_subspace is not None:
+            print(f"\n--- Strategy: semantic_pca_projection_k{pca_top_k} ---")
+            metrics = compute_asymmetric_metrics_with_pca(
+                config,
+                base_path,
+                style_subspace,
+                top_k=pca_top_k,
+                damping_factor=damping_factor,
+                eval_prompt_column="question",
+                eval_completion_column="answer",
+            )
+            print_metrics(metrics, f"semantic_pca_projection_k{pca_top_k}")
+            all_metrics[f"semantic_pca_projection_k{pca_top_k}"] = metrics
+
+            # PCA + H_train preconditioner combined with semantic
+            print(f"\n--- Strategy: semantic_pca_k{pca_top_k}_index ---")
+            metrics = compute_asymmetric_metrics_with_pca(
+                config,
+                base_path,
+                style_subspace,
+                top_k=pca_top_k,
+                preconditioner_name="index",
+                damping_factor=damping_factor,
+                eval_prompt_column="question",
+                eval_completion_column="answer",
+            )
+            print_metrics(metrics, f"semantic_pca_k{pca_top_k}_index")
+            all_metrics[f"semantic_pca_k{pca_top_k}_index"] = metrics
+
+            # Also try k=100 for more aggressive style removal
+            pca_k100 = 100
+            pirate_idx = Path("runs/precond_comparison/pirate")
+            shakespeare_idx = Path("runs/precond_comparison/shakespeare")
+            if pirate_idx.exists() and shakespeare_idx.exists():
+                style_subspace_k100 = compute_pca_style_subspace(
+                    pirate_idx,
+                    shakespeare_idx,
+                    base_path / "pca_subspace",
+                    top_k=pca_k100,
+                    exclude_facts=eval_facts_to_exclude,
+                )
+
+                print(f"\n--- Strategy: semantic_pca_projection_k{pca_k100} ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k100,
+                    top_k=pca_k100,
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_projection_k{pca_k100}")
+                all_metrics[f"semantic_pca_projection_k{pca_k100}"] = metrics
+
+                print(f"\n--- Strategy: semantic_pca_k{pca_k100}_index ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k100,
+                    top_k=pca_k100,
+                    preconditioner_name="index",
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_k{pca_k100}_index")
+                all_metrics[f"semantic_pca_k{pca_k100}_index"] = metrics
+
+                # Try k=500 to test full subspace removal (capped at dim=256)
+                pca_k500 = 500
+                style_subspace_k500 = compute_pca_style_subspace(
+                    pirate_idx,
+                    shakespeare_idx,
+                    base_path / "pca_subspace",
+                    top_k=pca_k500,
+                    exclude_facts=eval_facts_to_exclude,
+                )
+
+                print(f"\n--- Strategy: semantic_pca_projection_k{pca_k500} ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k500,
+                    top_k=pca_k500,
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_projection_k{pca_k500}")
+                all_metrics[f"semantic_pca_projection_k{pca_k500}"] = metrics
+
+                print(f"\n--- Strategy: semantic_pca_k{pca_k500}_index ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k500,
+                    top_k=pca_k500,
+                    preconditioner_name="index",
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_k{pca_k500}_index")
+                all_metrics[f"semantic_pca_k{pca_k500}_index"] = metrics
+
+                # Try k=1000 for even more aggressive style removal
+                pca_k1000 = 1000
+                style_subspace_k1000 = compute_pca_style_subspace(
+                    pirate_idx,
+                    shakespeare_idx,
+                    base_path / "pca_subspace",
+                    top_k=pca_k1000,
+                    exclude_facts=eval_facts_to_exclude,
+                )
+
+                print(f"\n--- Strategy: semantic_pca_projection_k{pca_k1000} ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k1000,
+                    top_k=pca_k1000,
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_projection_k{pca_k1000}")
+                all_metrics[f"semantic_pca_projection_k{pca_k1000}"] = metrics
+
+                print(f"\n--- Strategy: semantic_pca_k{pca_k1000}_index ---")
+                metrics = compute_asymmetric_metrics_with_pca(
+                    config,
+                    base_path,
+                    style_subspace_k1000,
+                    top_k=pca_k1000,
+                    preconditioner_name="index",
+                    damping_factor=damping_factor,
+                    eval_prompt_column="question",
+                    eval_completion_column="answer",
+                )
+                print_metrics(metrics, f"semantic_pca_k{pca_k1000}_index")
+                all_metrics[f"semantic_pca_k{pca_k1000}_index"] = metrics
+
     # Print summary comparison
     print("\n" + "=" * 70)
     print("SUMMARY COMPARISON")
     print("=" * 70)
 
-    print(f"\n{'Strategy':<25} {'Top-1 Semantic':<15} {'Top-1 Style Leak':<17}")
-    print("-" * 60)
+    print(f"\n{'Strategy':<35} {'Top-1 Semantic':<15} {'Top-1 Style Leak':<17}")
+    print("-" * 70)
 
     for name, m in all_metrics.items():
         print(
-            f"{name:<25} {m.top1_semantic_accuracy:<15.2%} "
-            f"{m.top1_style_leakage:<17.2%}"
+            f"{name:<35} {m.top1_semantic_accuracy:<15.2%} {m.top1_style_leakage:<17.2%}"
         )
 
     print("\n" + "=" * 70)

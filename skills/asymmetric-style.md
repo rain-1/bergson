@@ -6,17 +6,36 @@ This simulates a realistic scenario: your training data is mostly in one style (
 
 ## Usage
 
-```
-/asymmetric-style [options]
+There is no CLI interface for this experiment. It is run via Python scripts.
+
+**Recompute the main results table** (the most common operation):
+
+```bash
+python scripts/recompute_table.py
 ```
 
-Options:
-- `--base-path PATH` - Output directory (default: runs/asymmetric_style)
-- `--recompute` - Clear cached results and recompute from scratch
-- `--inner-product` - Use raw inner product instead of cosine similarity
-- `--sweep-pca` - Sweep PCA k values with preconditioner combinations
-- `--rewrite-ablation` - Run rewrite ablation (summed rewrites vs summed eval)
-- `--summary` - Just print summary of existing results
+This clears cached scores and recomputes all strategies, including PCA k=100 variants. It calls `run_asymmetric_experiment()` with specific flags and then separately computes PCA k=100 using full-gradient style indices.
+
+**Run PCA ablation with eval fact exclusion** (sweeps k=10, 100, 500):
+
+```bash
+python scripts/recompute_pca_noleak.py
+```
+
+**Run semantic PCA ablation** (PCA from answer-only gradients):
+
+```bash
+python scripts/semantic_pca_ablation.py
+```
+
+**Run all defaults** (includes strategies not in the table, like summed eval and majority control):
+
+```python
+from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
+
+config = AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style")
+results = run_asymmetric_experiment(config=config, base_path="runs/asymmetric_style")
+```
 
 ## What this does
 
@@ -24,7 +43,7 @@ Options:
    - Train: 95% shakespeare (dominant), 5% pirate (minority)
    - Eval: pirate style queries for facts only in shakespeare style in train
 2. Tests whether gradient-based attribution can find semantic matches despite style mismatch
-3. Compares strategies: baseline, preconditioners (R_between, H_eval, H_train), PCA projection, summed gradients, semantic-only eval
+3. Compares strategies: baseline, preconditioners (R_between, H_eval, H_train, mixed), PCA projection, semantic-only eval
 
 ## Strategies Tested
 
@@ -40,105 +59,86 @@ Transform gradients by `g' = g @ H^(-1)` before computing similarity, downweight
 
   Hypothesis: inverting this downweights the style axis, exposing semantic signal.
 
-- **H_eval**: Second moment of eval gradients: `H = (1/n) * G_eval.T @ G_eval`. Hypothesis: directions that vary a lot in the eval set (which is all one style) might be style-related, so downweighting high-variance eval directions could help.
+- **H_eval** (`eval_second_moment`): Second moment of eval gradients: `H = (1/n) * G_eval.T @ G_eval`. Hypothesis: directions that vary a lot in the eval set (which is all one style) might be style-related, so downweighting high-variance eval directions could help.
 
-- **H_train**: Second moment of training gradients: `H = (1/n) * G_train.T @ G_train`. This has theoretical grounding from influence functions: `g_eval @ H^{-1} @ g_train.T` approximates the change in eval loss from upweighting a training point (second-order Taylor expansion). So H_train is the "correct" similarity metric for influence-based attribution.
+- **H_train** (`train_second_moment` / `index`): Second moment of training gradients: `H = (1/n) * G_train.T @ G_train`. This has theoretical grounding from influence functions: `g_eval @ H^{-1} @ g_train.T` approximates the change in eval loss from upweighting a training point (second-order Taylor expansion). So H_train is the "correct" similarity metric for influence-based attribution.
 
-### Dimensionality Reduction
-- **PCA projection**: Compute pairwise differences between corresponding shakespeare/pirate gradients (same underlying fact, different style), then PCA on those difference vectors. Project out the top-k components of this "style difference" subspace.
+- **train_eval_mixed**: `H = α * H_train + (1-α) * H_eval`. Combines intuitions from both.
+
+### Dimensionality Reduction (PCA)
+- **PCA projection**: Uses separate full-gradient style indices from `runs/precond_comparison/` (pirate and shakespeare datasets with all facts). Computes pairwise differences between corresponding shakespeare/pirate gradients (same underlying fact, different style), then PCA on those difference vectors. Projects out the top-k components of this "style difference" subspace.
+
+  **Important**: Eval facts are excluded from the PCA computation to prevent data leakage.
 
   Hypothesis: the difference `g_shakespeare(fact) - g_pirate(fact)` isolates pure style variation (content is held constant). The top PCs of these differences capture the dominant style directions. Projecting them out should remove style signal while preserving semantic content.
 
-### Gradient Averaging
-- **summed_eval**: For each query, compute gradients in both styles (pirate + shakespeare), then sum them. Hypothesis: style-specific components cancel out, leaving semantic signal. This requires generating the query in multiple styles.
-
-- **summed_rewrites**: Sum gradients from two non-training styles (e.g., shakespeare + pirate rewrites of the same fact, when training only has formal). Tests whether style cancellation is general or requires matching training distribution.
-
-### Controls
-- **majority_no_precond**: Query in the majority (shakespeare) style—no style mismatch. This is the upper bound showing what's achievable when styles match.
+  Current k values tested: 10, 100, 500, 1000. PCA is combined with both no preconditioning and H_train (`index`) preconditioning.
 
 ### Semantic-only Eval (Best Performing)
-- **semantic_index**, **semantic_no_precond**: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with H_train preconditioning (`semantic_index`), this achieves the best results by a significant margin.
+- **semantic_index**, **semantic_no_precond**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. All preconditioners and PCA can be combined with the semantic prefix; these strategies are prefixed with `semantic_`.
+
+### Optional Strategies (not in main table)
+
+These are available via `run_asymmetric_experiment()` parameters but disabled in the standard `recompute_table.py` run:
+
+- **majority_no_precond**: Query in the majority (shakespeare) style—no style mismatch. Control showing what's achievable when styles match. Enable with `include_majority_control=True`.
+- **summed_eval**: For each query, compute gradients in both styles (pirate + shakespeare), then sum them. Tests whether style-specific components cancel out. Enable with `include_summed_eval=True`.
+- **summed_loss**: Sum gradients from loss on multiple style variants. Enable with `include_summed_loss=True`.
 
 ## Instructions
 
-### Run full experiment (using HuggingFace data)
+### Recompute the main results table
 
-The easiest way to run the experiment is using pre-generated data from HuggingFace:
+This is the primary way to reproduce results. The script (`scripts/recompute_table.py`):
 
-```python
-from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
+1. Clears cached scores and `experiment_results.json`
+2. Calls `run_asymmetric_experiment()` with these parameters:
+   ```python
+   run_asymmetric_experiment(
+       config=AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style"),
+       base_path=BASE_PATH,
+       include_pca=True,
+       pca_top_k=10,
+       include_summed_loss=False,
+       include_second_moments=True,
+       include_majority_control=False,
+       include_summed_eval=False,
+       include_semantic_eval=True,
+       damping_factor=0.1,
+   )
+   ```
+3. Separately computes PCA k=100 variants using full-gradient style indices from `runs/precond_comparison/`:
+   ```python
+   style_subspace_k100 = compute_pca_style_subspace(
+       pirate_idx=Path("runs/precond_comparison/pirate"),
+       shakespeare_idx=Path("runs/precond_comparison/shakespeare"),
+       cache_dir=BASE_PATH / "pca_subspace",
+       top_k=100,
+       exclude_facts=eval_facts_to_exclude,
+   )
+   ```
 
-# Use HF dataset - no local generation needed
-config = AsymmetricConfig(
-    hf_dataset="EleutherAI/bergson-asymmetric-style",
-)
+### Run PCA k-value sweep with eval exclusion
 
-results = run_asymmetric_experiment(
-    config=config,
-    base_path="runs/asymmetric_style",
-    # analysis_model defaults to EleutherAI/bergson-asymmetric-style-qwen3-8b-lora
-)
+```bash
+python scripts/recompute_pca_noleak.py
 ```
 
-### Run full experiment (generate locally)
+This sweeps k=10, 100, 500 with both no preconditioning and H_train, for both full-gradient and semantic-gradient conditions. Results are merged into `experiment_results.json`.
 
-To generate fresh data locally (requires Qwen model for rewording):
+### Run semantic PCA ablation
 
-```python
-from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
-
-config = AsymmetricConfig(
-    dominant_style="shakespeare",
-    minority_style="pirate",
-    dominant_ratio=0.95,
-)
-
-results = run_asymmetric_experiment(
-    config=config,
-    base_path="runs/asymmetric_style",
-)
+```bash
+python scripts/semantic_pca_ablation.py
 ```
 
-### Run PCA k-value sweep
-
-```python
-from examples.semantic.asymmetric import sweep_pca_k
-
-results = sweep_pca_k(
-    base_path="runs/asymmetric_style",
-    k_values=[1, 5, 10, 20, 50, 100],
-    preconditioners=[None, "index"],
-)
-```
-
-### Run rewrite ablation
-
-Tests whether summing two non-training styles helps (it doesn't):
-
-```python
-from examples.semantic.asymmetric import run_rewrite_ablation_experiment
-
-results = run_rewrite_ablation_experiment(base_path="runs/asymmetric_style")
-```
-
-### Run inner product comparison
-
-Compare cosine similarity vs raw inner product:
-
-```python
-from examples.semantic.asymmetric import run_inner_product_comparison
-
-results = run_inner_product_comparison(base_path="runs/asymmetric_style")
-```
+Tests whether computing the PCA style subspace from semantic (answer-only) gradients gives a cleaner subspace than full gradients. Requires building separate semantic gradient indices.
 
 ### Print existing results summary
 
 ```python
 import json
-import numpy as np
 from pathlib import Path
-from datasets import load_from_disk
 
 base_path = Path("runs/asymmetric_style")
 with open(base_path / "experiment_results.json") as f:
@@ -149,6 +149,24 @@ print(f"{'Strategy':<35} {'Top-1 Sem':<12} {'Top-5 Recall':<13} {'Top-1 Leak':<1
 print("-" * 72)
 for name, m in sorted_results:
     print(f"{name:<35} {m['top1_semantic']:<12.2%} {m['top5_semantic_recall']:<13.2%} {m['top1_leak']:<12.2%}")
+```
+
+## `run_asymmetric_experiment()` Parameters
+
+```python
+def run_asymmetric_experiment(
+    config: AsymmetricConfig | None = None,
+    base_path: Path | str = "runs/asymmetric_style",
+    analysis_model: str | None = None,
+    include_pca: bool = True,
+    pca_top_k: int = 10,
+    include_summed_loss: bool = True,
+    include_second_moments: bool = True,
+    include_majority_control: bool = True,
+    include_summed_eval: bool = True,
+    include_semantic_eval: bool = True,
+    damping_factor: float = 0.1,
+) -> dict[str, AsymmetricMetrics]
 ```
 
 ## Cached Data
@@ -167,6 +185,7 @@ runs/asymmetric_style/
 ├── eval_grads/                # Eval gradients (minority style)
 ├── eval_grads_majority/       # Eval gradients (majority style)
 ├── preconditioners/           # Various preconditioner matrices
+├── pca_subspace/              # Cached PCA style subspace components
 ├── scores_*/                  # Score matrices for each strategy
 └── experiment_results.json    # Cached metrics summary
 ```
@@ -176,12 +195,13 @@ runs/asymmetric_style/
 - `index/` - bergson build for training gradients (~2 min)
 - `eval_grads*/` - bergson build for eval gradients (~1 min each)
 - `preconditioners/` - Preconditioner computation (~30 sec)
+- `pca_subspace/` - PCA style subspace computation
 - `scores_*/` - Score computation (~10 sec each)
 - `experiment_results.json` - Metrics computed from scores
 
-If the user specifies `--recompute`, first delete cached data:
+To recompute scores only (what `recompute_table.py` does):
 ```bash
-rm -rf runs/asymmetric_style/index runs/asymmetric_style/eval_grads* runs/asymmetric_style/scores_* runs/asymmetric_style/preconditioners
+rm -rf runs/asymmetric_style/scores_* runs/asymmetric_style/experiment_results.json
 ```
 
 To recompute everything including data:
@@ -212,26 +232,21 @@ The datasets and fine-tuned model for this experiment are available on Hugging F
 
 ## Key Findings
 
-| Strategy | Top-1 Semantic | Notes |
-|----------|---------------|-------|
-| majority_no_precond | ~100% | Control: no style mismatch |
-| semantic_index | ~95%+ | **Best**: Q&A format + H_train preconditioning |
-| semantic_no_precond | ~90%+ | Q&A format without preconditioning |
-| summed_eval | ~93% | Sum minority + majority style eval grads |
-| summed_rewrites | <1% | Sum shakespeare + pirate (both non-training) |
-| no_precond (baseline) | <1% | Pure style matching dominates |
-| preconditioners alone | ~1-2% | Marginal improvement without semantic masking |
+| Strategy | Top-1 Semantic | Top-5 Recall | Style Leak | Notes |
+|----------|---------------|-------------|------------|-------|
+| semantic_pca_k100_index | 12.72% | 28.43% | 56.71% | **Best**: PCA k=100 + H_train + semantic |
+| semantic_pca_k10_index | 9.79% | 20.78% | 65.31% | PCA k=10 + H_train + semantic |
+| semantic_eval_second_moment | 9.34% | 21.17% | 61.73% | H_eval + semantic |
+| semantic_index | 9.00% | 19.33% | 66.00% | H_train + semantic |
+| semantic_train_eval_mixed | 8.90% | 20.68% | 64.76% | Mixed H + semantic |
+| semantic_pca_projection_k100 | 7.01% | 17.30% | 54.67% | PCA k=100 + semantic (no precond) |
+| eval_second_moment | 4.32% | 8.95% | 81.26% | H_eval (no semantic) |
+| train_second_moment | 3.58% | 6.46% | 87.38% | H_train (no semantic) |
+| r_between | 2.58% | 5.47% | 83.55% | Style-direction rank-1 precond |
+| no_precond | 1.74% | 2.73% | 90.76% | Baseline: style dominates |
 
 **Main insights**:
-- The semantic Q&A approach (masking style tokens, keeping only answer gradients) combined with H_train preconditioning achieves the best results
-- summed_eval works because one component matches training distribution, not because of general style cancellation
-
-## Similarity Metric Comparison
-
-With cosine similarity (my experiments):
-- summed_eval: 92.71%
-
-With raw inner product (bergson default):
-- summed_eval: 76.91%
-
-Cosine similarity helps by removing gradient magnitude as a confounding factor.
+- Semantic masking (Q&A format, answer-only gradients) is the most impactful single intervention
+- PCA projection (k=100) combined with H_train preconditioning and semantic masking gives the best results
+- Preconditioners alone (without semantic masking) provide only marginal improvement over baseline
+- Over-aggressive PCA (k=500, k=1000) removes too much signal and hurts performance

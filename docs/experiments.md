@@ -135,3 +135,49 @@ The unnormalized inner product `g_eval @ H^(-1) @ g_train.T` is the classic infl
 #### Semantic-only Eval
 
 - **semantic_index**, **semantic_no_precond**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with preconditioning (`semantic_index`), this method achieves the best results by a significant margin.
+
+### Running the Experiment
+
+**With an AI agent**: Point Claude Code or another AI agent at `skills/asymmetric-style.md` for detailed instructions.
+
+**Recompute the main results table** (most common):
+
+```bash
+python scripts/recompute_table.py
+```
+
+This clears cached scores and recomputes all strategies. It calls `run_asymmetric_experiment()` with specific flags (disabling summed eval, majority control, and summed loss) and separately computes PCA k=100 variants using full-gradient style indices from `runs/precond_comparison/`.
+
+**Run with all defaults** (includes optional strategies like summed eval and majority control):
+
+```python
+from examples.semantic.asymmetric import run_asymmetric_experiment, AsymmetricConfig
+
+config = AsymmetricConfig(
+    hf_dataset="EleutherAI/bergson-asymmetric-style",  # Use pre-computed data
+)
+
+results = run_asymmetric_experiment(
+    config=config,
+    base_path="runs/asymmetric_style",
+)
+```
+
+See `skills/asymmetric-style.md` for additional scripts (`recompute_pca_noleak.py`, `semantic_pca_ablation.py`) and full parameter documentation.
+
+### View Results
+
+```python
+import json
+from pathlib import Path
+
+base_path = Path("runs/asymmetric_style")
+with open(base_path / "experiment_results.json") as f:
+    results = json.load(f)
+
+sorted_results = sorted(results.items(), key=lambda x: -x[1]["top1_semantic"])
+print(f"{'Strategy':<35} {'Top-1 Sem':<12} {'Top-5 Recall':<13} {'Top-1 Leak':<12}")
+print("-" * 72)
+for name, m in sorted_results:
+    print(f"{name:<35} {m['top1_semantic']:<12.2%} {m['top5_semantic_recall']:<13.2%} {m['top1_leak']:<12.2%}")
+```
