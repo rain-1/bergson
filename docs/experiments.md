@@ -130,7 +130,7 @@ The unnormalized inner product `g_eval @ H^(-1) @ g_train.T` is the classic infl
 
 #### Dimensionality Reduction
 
-- **pca_k{n}_index**: Compute PCA on the matrix of paired pirate/shakespeare style differences (differences between matched facts, train set only). Project gradients onto the orthogonal complement of the top-n principal components, then precondition with the train set second moment matrix. This removes the dominant style directions while preserving semantic signal.
+- **pca_k{n}_index**: Compute PCA on the matrix of paired style differences (differences between matched facts, train set only). Project gradients onto the orthogonal complement of the top-n principal components, then precondition with the train set second moment matrix. This removes the dominant style directions while preserving semantic signal. The k values and style index path are configurable via `AsymmetricConfig.pca_k_values` and `AsymmetricConfig.style_index_path`.
 
 #### Semantic-only Eval
 

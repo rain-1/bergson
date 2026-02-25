@@ -52,13 +52,13 @@ Transform gradients by `g' = g @ H^(-1)` before computing similarity, downweight
 - **train_eval_mixed**: `H = α * H_train + (1-α) * H_eval`. Combines intuitions from both.
 
 ### Dimensionality Reduction (PCA)
-- **PCA projection**: Uses separate full-gradient style indices from `runs/precond_comparison/` (pirate and shakespeare datasets with all facts). Computes pairwise differences between corresponding shakespeare/pirate gradients (same underlying fact, different style), then PCA on those difference vectors. Projects out the top-k components of this "style difference" subspace.
+- **PCA projection**: Uses separate full-gradient style indices (path configurable via `config.style_index_path`, default `runs/precond_comparison/`). Computes pairwise differences between corresponding dominant/minority gradients (same underlying fact, different style), then PCA on those difference vectors. Projects out the top-k components of this "style difference" subspace.
 
   **Important**: Eval facts are excluded from the PCA computation to prevent data leakage.
 
   Hypothesis: the difference `g_shakespeare(fact) - g_pirate(fact)` isolates pure style variation (content is held constant). The top PCs of these differences capture the dominant style directions. Projecting them out should remove style signal while preserving semantic content.
 
-  Current k values tested: 10, 100, 500, 1000. PCA is combined with both no preconditioning and H_train (`index`) preconditioning.
+  K values are configurable via `config.pca_k_values` (default: 10, 100, 500, 1000). PCA is combined with both no preconditioning and H_train (`index`) preconditioning.
 
 ### Semantic-only Eval (Best Performing)
 - **semantic_index**, **semantic_no_precond**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. All preconditioners and PCA can be combined with the semantic prefix; these strategies are prefixed with `semantic_`.
@@ -82,7 +82,6 @@ results = run_asymmetric_experiment(
     config=AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style"),
     base_path="runs/asymmetric_style",
     include_pca=True,
-    pca_top_k=10,
     include_second_moments=True,
     include_semantic_eval=True,
     damping_factor=0.1,
@@ -114,7 +113,6 @@ def run_asymmetric_experiment(
     base_path: Path | str = "runs/asymmetric_style",
     analysis_model: str | None = None,
     include_pca: bool = True,
-    pca_top_k: int = 10,
     include_summed_loss: bool = True,
     include_second_moments: bool = True,
     include_majority_control: bool = True,
@@ -123,6 +121,10 @@ def run_asymmetric_experiment(
     damping_factor: float = 0.1,
 ) -> dict[str, AsymmetricMetrics]
 ```
+
+PCA k values and the style index path are configured via `AsymmetricConfig`:
+- `config.pca_k_values`: Tuple of k values to sweep (default: `(10, 100, 500, 1000)`)
+- `config.style_index_path`: Path to style-specific indices (default: `"runs/precond_comparison"`)
 
 ## Cached Data
 
