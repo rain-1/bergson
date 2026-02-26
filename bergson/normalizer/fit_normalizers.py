@@ -135,8 +135,6 @@ class NormalizerCollector(HookCollectorBase):
 
         self.callback(name, P)
 
-        del module._inputs
-
     def process_batch(self, indices: list[int], **kwargs):
         """Process collected gradients for a batch."""
 

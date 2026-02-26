@@ -99,6 +99,13 @@ class HookCollectorBase(ContextDecorator, ABC):
             self.filter_modules,
         )
 
+        # Validate that attention_cfgs keys match actual module names
+        if unknown := set(self.attention_cfgs) - set(self.target_info):
+            raise ValueError(
+                f"attention_cfgs contains module names not found in the model: "
+                f"{unknown}. Available modules: {set(self.target_info)}"
+            )
+
         # Allow subclasses to perform custom initialization
         self.setup()
 
@@ -162,7 +169,9 @@ class HookCollectorBase(ContextDecorator, ABC):
             name = module._name
 
             if name not in self.attention_cfgs:
-                return fn(self, module, g)
+                fn(self, module, g)
+                del module._inputs
+                return
 
             num_heads, head_size, head_dim = astuple(self.attention_cfgs[name])
 
@@ -189,6 +198,7 @@ class HookCollectorBase(ContextDecorator, ABC):
             # Restore
             module._name = orig_name
             setattr(module, LayerAdapter.out_attr(module), orig_out)
+            del module._inputs
 
         return wrapper
 

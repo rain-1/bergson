@@ -8,7 +8,7 @@ import random
 
 from datasets import Dataset, load_dataset
 
-from bergson import HeadConfig
+from bergson import AttentionConfig
 from bergson.utils import assert_type
 from examples.induction.attn_only_transformer import (  # noqa: F401
     AttnOnlyConfig,
@@ -16,10 +16,10 @@ from examples.induction.attn_only_transformer import (  # noqa: F401
 )
 
 HEAD_CFGS = {
-    "h.0.attn.c_attn": HeadConfig(12, 192, 2),
-    "h.0.attn.c_proj": HeadConfig(12, 64, 2),
-    "h.1.attn.c_attn": HeadConfig(12, 192, 2),
-    "h.1.attn.c_proj": HeadConfig(12, 64, 2),
+    "h.0.attn.c_attn": AttentionConfig(12, 192, 2),
+    "h.0.attn.c_proj": AttentionConfig(12, 64, 2),
+    "h.1.attn.c_attn": AttentionConfig(12, 192, 2),
+    "h.1.attn.c_proj": AttentionConfig(12, 64, 2),
 }
 
 

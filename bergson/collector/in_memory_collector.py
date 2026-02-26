@@ -255,8 +255,6 @@ class InMemoryCollector(HookCollectorBase):
                 non_blocking=True,
             )
 
-        del module._inputs  # type: ignore
-
     def process_batch(self, indices: list[int], **kwargs) -> None:
         losses = kwargs.get("losses")
         assert losses is not None, "losses must be provided in kwargs"

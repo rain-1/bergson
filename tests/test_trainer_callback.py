@@ -9,6 +9,7 @@ from datasets import Dataset
 from transformers import AutoConfig, AutoModelForCausalLM, Trainer, TrainingArguments
 from trl import SFTConfig, SFTTrainer
 
+from bergson.config import AttentionConfig
 from bergson.data import load_gradients
 from bergson.huggingface import (
     GradientCollectorCallback,
@@ -245,3 +246,60 @@ class TestGradientCollectorCallback:
         saved_order = Dataset.load_from_disk(str(order_file))
         assert len(saved_order) > 0
         assert all(key in saved_order[0] for key in ["_idx", "global_step", "epoch"])
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_attention_head_splitting(self, tmp_path, model, dataset):
+        """Test that attention head splitting produces per-head gradients
+        for all configured heads during HF Trainer callback collection."""
+        # tiny-Phi3 o_proj has shape [8, 8] -> split into 2 heads of size 4
+        num_heads = 2
+        head_size = 4
+        attention_cfgs = {
+            "layers.0.self_attn.o_proj": AttentionConfig(
+                num_heads=num_heads, head_size=head_size, head_dim=2
+            ),
+        }
+
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path / "output"),
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            gradient_accumulation_steps=1,
+            save_strategy="no",
+            logging_strategy="no",
+            remove_unused_columns=False,
+        )
+
+        callback = GradientCollectorCallback(
+            path=tmp_path / "gradients",
+            attention_cfgs=attention_cfgs,
+            use_optimizer_state=False,
+        )
+
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            callbacks=[callback],
+        )
+        trainer = prepare_for_gradient_collection(trainer)
+        trainer.train()
+
+        # Verify per-head gradient files were created
+        gradient_dir = tmp_path / "gradients" / "train" / "epoch_0"
+        gradients = load_gradients(gradient_dir)
+        module_names = gradients.dtype.names
+
+        head_modules = [n for n in module_names if "head_" in n]
+        assert len(head_modules) == num_heads, (
+            f"Expected {num_heads} per-head gradient columns, "
+            f"got {len(head_modules)}: {head_modules}"
+        )
+
+        # Verify all head gradients are non-zero
+        for head_name in head_modules:
+            assert (
+                gradients[head_name][0].sum().item() != 0.0
+            ), f"Gradient for {head_name} is all zeros"
