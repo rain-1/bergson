@@ -170,9 +170,7 @@ class HookCollectorBase(ContextDecorator, ABC):
             name = module._name
 
             if name not in self.attention_cfgs:
-                fn(self, module, g)
-                del module._inputs
-                return
+                return fn(self, module, g)
 
             num_heads, head_size, head_dim = astuple(self.attention_cfgs[name])
 
@@ -199,7 +197,6 @@ class HookCollectorBase(ContextDecorator, ABC):
             # Restore
             module._name = orig_name
             setattr(module, LayerAdapter.out_attr(module), orig_out)
-            del module._inputs
 
         return wrapper
 
@@ -330,6 +327,8 @@ class HookCollectorBase(ContextDecorator, ABC):
         g = grad_out[0].detach()  # [N, S, O]
 
         self.backward_hook(module, g)
+        if hasattr(module, "_inputs"):
+            del module._inputs
 
     def __exit__(self, exc_type, exc, tb):
         """Clean up hooks and allow subclass cleanup."""
