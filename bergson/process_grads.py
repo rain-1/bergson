@@ -6,7 +6,7 @@ from typing import Literal
 import torch
 
 from bergson.gradients import GradientProcessor
-from bergson.utils.math import damped_psd_power
+from bergson.utils.math import compute_lambda, damped_psd_power
 
 
 def normalize_grad(
@@ -50,7 +50,7 @@ def mix_preconditioners(
     query_path: str | Path,
     index_path: str | Path,
     output_path: str | Path,
-    mixing_coefficient: float = 0.99,
+    target_downweight_components: int = 1000,
 ) -> Path:
     """Mix query and index preconditioners and save the result to disk.
 
@@ -68,8 +68,9 @@ def mix_preconditioners(
         Directory containing the index GradientProcessor.
     output_path : str | Path
         Directory where the mixed GradientProcessor will be saved.
-    mixing_coefficient : float
-        Weight for the query preconditioner (1.0 = query only).
+    target_downweight_components : int
+        Number of gradient components to downweight via automatic lambda
+        selection
 
     Returns
     -------
@@ -82,6 +83,13 @@ def mix_preconditioners(
 
     q_proc = GradientProcessor.load(query_path)
     i_proc = GradientProcessor.load(index_path)
+
+    # Auto-compute mixing coefficient (§A.1.3 of Chang et al., 2024)
+    mixing_coefficient = compute_lambda(
+        query_eigen=q_proc.preconditioners_eigen,
+        index_eigen=i_proc.preconditioners_eigen,
+        target_components=target_downweight_components,
+    )
 
     mixed_preconditioners = {
         k: q_proc.preconditioners[k] * mixing_coefficient
@@ -106,6 +114,7 @@ def mix_preconditioners(
         "query_path": str(query_path),
         "index_path": str(index_path),
         "mixing_coefficient": mixing_coefficient,
+        "target_downweight_components": target_downweight_components,
     }
     with (output_path / "mix_config.json").open("w") as f:
         json.dump(mix_config, f, indent=2)

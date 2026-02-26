@@ -10,8 +10,6 @@ from .config import (
 from .process_grads import mix_preconditioners
 from .score.score import score_dataset
 from .utils.worker_utils import validate_run_path
-from .utils.math import compute_lambda
-from .gradients import GradientProcessor
 
 
 def trackstar(
@@ -49,28 +47,11 @@ def trackstar(
 
     # Step 3: Mix query and value preconditioners
     print("Step 3/5: Mixing preconditioners...")
-    # Auto-compute mixing coefficient if target_downweight_components > 0
-    if trackstar_cfg.target_downweight_components > 0:
-        query_processor = GradientProcessor.load(query_precond_path)
-        value_processor = GradientProcessor.load(value_precond_path)
-        lam = compute_lambda(
-            query_eigen=query_processor.preconditioners_eigen,
-            index_eigen=value_processor.preconditioners_eigen,
-            target_components=trackstar_cfg.target_downweight_components,
-        )
-        print(
-            f"Auto-computed mixing coefficient λ={lam:.4f} "
-            f"(target {trackstar_cfg.target_downweight_components} "
-            f"downweighted components)"
-        )
-    else:
-        lam = 0.99
-
     mix_preconditioners(
         query_path=query_precond_path,
         index_path=value_precond_path,
         output_path=mixed_precond_path,
-        mixing_coefficient=lam,
+        target_downweight_components=trackstar_cfg.target_downweight_components,
     )
 
     # Step 4: Build per-item query gradient index

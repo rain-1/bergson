@@ -197,7 +197,7 @@ This pipeline is also available as the ``trackstar`` command, which automates th
 
 **Why** :math:`H^{-1/2}` **on both sides?** For inner product scoring, applying :math:`H^{-1}` to one side only is sufficient since the relative ordering of :math:`g_q H^{-1} g_t^T` is preserved. For cosine similarity, the unit normalization would undo a one-sided application: normalizing :math:`g_t` to unit norm discards the preconditioner's geometry. Applying :math:`H^{-1/2}` symmetrically to both sides before normalization preserves the preconditioned structure and ensures the normalization operates in the correct space.
 
-**Mixing query and index preconditioners:** When query and index datasets come from different distributions, ``--mixing_coefficient`` (default 0.99) interpolates between their second moment matrices (i.e. the empirical Fisher information matrices):
+**Mixing query and index preconditioners:** When query and index datasets come from different distributions, ``--target_downweight_components`` (default 1000) is used to compute a mixing coefficient that interpolates between their second moment matrices (i.e. the empirical Fisher information matrices):
 
 .. math::
 

@@ -43,8 +43,16 @@ pip install bergson
 
 # Quickstart
 
+To construct an index of randomly projected gradients:
+
 ```
-bergson build runs/quickstart --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+```
+
+To collect Trackstar attribution scores:
+
+```
+bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
 ```
 
 # Usage
