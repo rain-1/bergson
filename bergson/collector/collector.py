@@ -90,6 +90,7 @@ class HookCollectorBase(ContextDecorator, ABC):
 
         self._fwd_hooks: list[RemovableHandle] = []
         self._bwd_hooks: list[RemovableHandle] = []
+        self._active = True
 
         # Discover target modules using the static method
         self.target_info = self.discover_targets(
@@ -310,6 +311,8 @@ class HookCollectorBase(ContextDecorator, ABC):
 
     def _process_input(self, module: nn.Module, inp: tuple, _):
         """Internal forward hook that extracts input and delegates to subclass."""
+        if not self._active:
+            return
 
         x = inp[0].detach()
         assert x.ndim == 3, f"Expected input of shape [N, S, I], got {x.shape}"

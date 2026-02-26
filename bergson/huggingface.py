@@ -178,7 +178,9 @@ class GradientCollectorCallback(TrainerCallback):
         # Always pop _idx to prevent it from being passed to the model
         idx = kwargs.pop("_idx", None)
 
-        # Only record indices during training
+        # Disable gradient collection during evaluation
+        self.collector._active = module.training
+
         if module.training and idx is not None:
             self.batch_indices = idx.to("cpu", non_blocking=True)
 
