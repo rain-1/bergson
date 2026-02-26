@@ -99,6 +99,13 @@ class HookCollectorBase(ContextDecorator, ABC):
             self.filter_modules,
         )
 
+        # Validate that attention_cfgs keys match actual module names
+        if unknown := set(self.attention_cfgs) - set(self.target_info):
+            raise ValueError(
+                f"attention_cfgs contains module names not found in the model: "
+                f"{unknown}. Available modules: {set(self.target_info)}"
+            )
+
         # Allow subclasses to perform custom initialization
         self.setup()
 
@@ -300,7 +307,6 @@ class HookCollectorBase(ContextDecorator, ABC):
 
     def _process_input(self, module: nn.Module, inp: tuple, _):
         """Internal forward hook that extracts input and delegates to subclass."""
-
         x = inp[0].detach()
         assert x.ndim == 3, f"Expected input of shape [N, S, I], got {x.shape}"
 
@@ -317,6 +323,8 @@ class HookCollectorBase(ContextDecorator, ABC):
         g = grad_out[0].detach()  # [N, S, O]
 
         self.backward_hook(module, g)
+        if hasattr(module, "_inputs"):
+            del module._inputs
 
     def __exit__(self, exc_type, exc, tb):
         """Clean up hooks and allow subclass cleanup."""

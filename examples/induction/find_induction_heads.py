@@ -122,8 +122,8 @@ def train_with_gradients(
     )
 
     bergson_callback = GradientCollectorCallback(
-        path=f"{output_dir}/gradients",
-        head_cfgs=HEAD_CFGS,
+        path=Path(f"{output_dir}/gradients"),
+        attention_cfgs=HEAD_CFGS,
         projection_dim=projection_dim,
         dtype=np.float32,
         accumulate_grads=False,
@@ -154,10 +154,13 @@ def reduce_query_gradients(
     model,
     induction_dataset,
     projection_dim,
+    output_dir: str,
 ):
     """Reduce induction head gradients to a mean gradient vector in memory."""
+    query_path = f"{output_dir}/query"
+    Path(query_path + ".part").mkdir(parents=True, exist_ok=True)
     cfg = IndexConfig(
-        run_path="",
+        run_path=query_path,
         projection_dim=projection_dim,
         skip_preconditioners=True,
     )
@@ -171,6 +174,7 @@ def reduce_query_gradients(
         data=induction_dataset,
         cfg=cfg,
         processor=processor,
+        attention_cfgs=HEAD_CFGS,
         reduce_cfg=ReduceConfig(method="mean"),
     )
 
@@ -225,6 +229,7 @@ def main(args):
         model,
         induction_dataset,
         args.projection_dim,
+        output_dir,
     )
     del model
 
