@@ -86,14 +86,15 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     fwd_state = state0
 
     stream = DataStream(
-        dataset, processor, batch_size=8, num_batches=100, device=f"cuda:{rank}"
+        dataset, processor, batch_size=8, num_batches=16, device=f"cuda:{rank}"
     )
-    folder = "/mnt/ssd-3/nora/magic-ckpts"
-    fwd_state = trainer.train(fwd_state, stream, save_dir=folder)
 
     # Use an arbitrary batch from the dataset as the test example
-    ex = stream[49]
+    ex = stream[0]
     del ex["example_weight"]
+
+    folder = "/mnt/ssd-3/nora/magic-ckpts"
+    fwd_state = trainer.train(fwd_state, stream, save_dir=folder)
 
     # Compute gradient of the test loss with respect to the final state
     loss = trainer.evaluate(fwd_state, ex)
@@ -131,7 +132,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
         for x in stream:
             fwd_state = trainer.step(fwd_state, x)
 
-        loss = trainer.evaluate(fwd_state, stream[49])
+        loss = trainer.evaluate(fwd_state, stream[0])
         if world_size > 1:
             dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
@@ -151,7 +152,6 @@ def main():
         dist_main(ds, worker)
     else:
         ds = load_dataset("EleutherAI/SmolLM2-135M-10B", split="train")
-        ds = ds.map(lambda x: {"length": len(x["text"])}).sort("length")
 
     dist_main(ds, worker)
 

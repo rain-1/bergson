@@ -106,8 +106,10 @@ class DataStream:
         else:
             x = self.processor(
                 x[self.input_key],
+                max_length=512,
                 padding=True,
                 return_tensors="pt",
+                truncation=True,
             )
             x["input_ids"] = x["labels"] = x["input_ids"][self.rank :: self.world_size]
 
@@ -326,19 +328,24 @@ class Trainer:
                 p = os.path.join(save_dir, f"step_{i}.ckpt")
 
                 # Create a new process group so that we can overlap saves
-                grp = dist.new_group(backend="gloo", group_desc=f"step_{i}")
-                assert isinstance(grp, dist.ProcessGroup)
+                if dist.is_initialized():
+                    grp = dist.new_group(backend="gloo", group_desc=f"step_{i}")
+                    assert isinstance(grp, dist.ProcessGroup)
+                else:
+                    grp = None
 
                 fut = dcp.async_save(
                     state.state_dict(),
                     checkpoint_id=p,
+                    no_dist=grp is None,
                     process_group=grp,
                 )
                 assert isinstance(fut, Future)
 
                 def callback(_, i=i, p=p, g=grp):
                     print(f"Checkpoint {i} saved to {p}")
-                    dist.destroy_process_group(g)
+                    if g:
+                        dist.destroy_process_group(g)
 
                 fut.add_done_callback(callback)
                 save_futures.append(fut)
@@ -370,7 +377,11 @@ class Trainer:
 
             idx, path = ckpt_list[-1]
             fwd_state.batch_index = idx
-            dcp.load(fwd_state.state_dict(), checkpoint_id=path)
+            dcp.load(
+                fwd_state.state_dict(),
+                checkpoint_id=path,
+                no_dist=not dist.is_initialized(),
+            )
 
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
@@ -396,18 +407,22 @@ class Trainer:
                     ckpt_list.append((idx, path))
 
                     # Create a new process group so that we can overlap saves
-                    grp = dist.new_group(backend="gloo", group_desc=f"step_{idx}")
-                    assert isinstance(grp, dist.ProcessGroup)
+                    if dist.is_initialized():
+                        grp = dist.new_group(backend="gloo", group_desc=f"step_{idx}")
+                        assert isinstance(grp, dist.ProcessGroup)
+                    else:
+                        grp = None
 
                     fut = dcp.async_save(
                         fwd_state.state_dict(),
                         checkpoint_id=path,
+                        no_dist=grp is None,
                         process_group=grp,
                     )
                     assert isinstance(fut, Future)
 
                     fut.add_done_callback(
-                        lambda _, g=grp: dist.destroy_process_group(g)
+                        lambda _, g=grp: dist.destroy_process_group(g) if g else None
                     )
                     save_futures.append(fut)
 
