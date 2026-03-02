@@ -65,7 +65,7 @@ def main():
     train_ds = setup_data_pipeline(index_cfg)
     assert isinstance(train_ds, Dataset)
     train_batches = allocate_batches(
-        train_ds["length"],
+        train_ds["length"][:],
         index_cfg.token_batch_size,
     )
     print(
@@ -88,7 +88,7 @@ def main():
     query_ds = setup_data_pipeline(query_cfg)
     assert isinstance(query_ds, Dataset)
     query_batches = allocate_batches(
-        query_ds["length"],
+        query_ds["length"][:],
         query_cfg.token_batch_size,
     )
     print(f"Query set: {len(query_ds)} examples, " f"{sum(query_ds['length'])} tokens")

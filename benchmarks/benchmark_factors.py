@@ -177,7 +177,7 @@ def _run_bergson_normalizer(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
 
     model, _ = setup_model_and_peft(index_cfg, device_map_auto=True)
-    batches = allocate_batches(ds["length"], run_cfg.token_batch_size)
+    batches = allocate_batches(ds["length"][:], run_cfg.token_batch_size)
 
     collector = NormalizerCollector(
         model=model.base_model,  # type: ignore
@@ -243,7 +243,7 @@ def _run_bergson_preconditioner(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
 
     model, _ = setup_model_and_peft(index_cfg, device_map_auto=True)
-    batches = allocate_batches(ds["length"], run_cfg.token_batch_size)
+    batches = allocate_batches(ds["length"][:], run_cfg.token_batch_size)
 
     collector = GradientCollector(
         model=model.base_model,  # type: ignore
@@ -313,7 +313,7 @@ def _run_bergson_kfac(
 
     # ekfac requires single-device (matching hessian_worker pattern)
     model, target_modules = setup_model_and_peft(index_cfg, device_map_auto=False)
-    batches = allocate_batches(ds["length"], run_cfg.token_batch_size)
+    batches = allocate_batches(ds["length"][:], run_cfg.token_batch_size)
 
     collector = CovarianceCollector(
         model=model.base_model,  # type: ignore

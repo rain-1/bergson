@@ -81,7 +81,7 @@ def reduce_worker(
     }
 
     if isinstance(ds, Dataset):
-        batches = allocate_batches(ds["length"], index_cfg.token_batch_size)
+        batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
         kwargs["batches"] = batches
         collect_gradients(**kwargs)
     else:

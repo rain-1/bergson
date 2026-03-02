@@ -254,7 +254,7 @@ class MemmapSequenceScoreWriter(ScoreWriter):
         if rank == 0 and not scores_file_path.exists():
             print(f"Creating new scores file: {scores_file_path}")
 
-            # w+ mode creates a zero-filled file; written flags are already False.
+            # w+ mode creates a zero-filled file.
             self.scores = np.memmap(
                 str(scores_file_path),
                 dtype=np.dtype(struct_dtype),  # type: ignore
