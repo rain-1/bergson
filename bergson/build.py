@@ -78,7 +78,7 @@ def build_worker(
     }
 
     if isinstance(ds, Dataset):
-        batches = allocate_batches(ds["length"], cfg.token_batch_size)
+        batches = allocate_batches(ds["length"][:], cfg.token_batch_size)
         kwargs["batches"] = batches
         collect_gradients(**kwargs)
     else:

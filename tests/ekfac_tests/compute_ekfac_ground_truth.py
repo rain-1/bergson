@@ -301,7 +301,7 @@ def tokenize_and_allocate_step(
     data = ds
 
     batches_world = _allocate_batches_world(
-        doc_lengths=ds["length"], N=cfg.token_batch_size, world_size=workers
+        doc_lengths=ds["length"][:], N=cfg.token_batch_size, world_size=workers
     )
 
     return data, batches_world, tokenizer

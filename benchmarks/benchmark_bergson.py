@@ -275,7 +275,7 @@ class Run:
 
         ds = assert_type(Dataset, setup_data_pipeline(index_cfg))
         batches = allocate_batches(
-            ds["length"], optimal_token_batch_size  # type: ignore
+            ds["length"][:], optimal_token_batch_size  # type: ignore
         )
 
         # In-memory query + score phase
@@ -287,7 +287,7 @@ class Run:
                 cfg=index_cfg,
             )
             query_batches = allocate_batches(
-                eval_ds["length"], optimal_token_batch_size
+                eval_ds["length"][:], optimal_token_batch_size
             )
             query_computer = CollectorComputer(
                 model=model,
