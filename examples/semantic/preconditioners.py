@@ -591,7 +591,8 @@ def report_pca_variance(
         exclude_facts: Optional set of fact strings to exclude.
 
     Returns:
-        Dictionary mapping k -> {"mean_pct": float, "median_pct": float, "n_capped": int, "n_modules": int}.
+        Dictionary mapping k -> {"mean_pct": float, "median_pct": float,
+        "n_capped": int, "n_modules": int}.
     """
     from datasets import load_from_disk
 

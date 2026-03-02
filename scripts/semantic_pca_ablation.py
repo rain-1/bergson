@@ -220,7 +220,10 @@ def main():
         ),
     ]
 
-    header = f"{'Condition':<25} {'Full-grad PCA Top-1':<22} {'Semantic PCA Top-1':<22} {'Full Leak':<12} {'Sem Leak':<12}"
+    header = (
+        f"{'Condition':<25} {'Full-grad PCA Top-1':<22} "
+        f"{'Semantic PCA Top-1':<22} {'Full Leak':<12} {'Sem Leak':<12}"
+    )
     print(header)
     print("-" * len(header))
 
