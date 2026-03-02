@@ -1,6 +1,7 @@
 import json
 import warnings
 from pathlib import Path
+from typing import Literal
 
 import torch
 
@@ -150,6 +151,35 @@ def get_trackstar_preconditioner(
     }
 
 
+def precondition_flat_grads(
+    grads: torch.Tensor,
+    h_inv: dict[str, torch.Tensor],
+    ordered_modules: list[str],
+    batch_size: int = 8192,
+) -> torch.Tensor:
+    """Precondition flat (concatenated) gradients in-place.
+
+    Uses column offsets to avoid duplicating the full tensor and processes
+    rows in batches to bound peak memory. Each small ``[batch, d]`` slice is
+    moved to ``h_inv``'s device for the matmul and written back.
+    """
+    if not h_inv:
+        return grads
+
+    for start in range(0, grads.shape[0], batch_size):
+        end = min(start + batch_size, grads.shape[0])
+        col = 0
+        for name in ordered_modules:
+            h = h_inv[name]
+            d = h.shape[0]
+            grads[start:end, col : col + d] = (
+                grads[start:end, col : col + d].to(device=h.device, dtype=h.dtype) @ h
+            ).to(device=grads.device, dtype=grads.dtype)
+            col += d
+
+    return grads
+
+
 def precondition_grad(
     grad: dict[str, torch.Tensor],
     h_inv: dict[str, torch.Tensor],
@@ -163,3 +193,49 @@ def precondition_grad(
         @ h_inv[name]
         for name in grad.keys()
     }
+
+
+def preprocess_grads(
+    grad_dict: dict[str, torch.Tensor],
+    grad_column_names: list[str],
+    unit_normalize: bool,
+    device: torch.device,
+    aggregate_grads: Literal["mean", "sum", "none"] = "none",
+    normalize_aggregated_grad: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Preprocess the gradients. Returns a dictionary of preprocessed gradients
+    with shape [N, grad_dim] or [1, grad_dim]. Preprocessing includes some
+    combination of per-item unit normalization, aggregation, aggregated
+    gradient normalization, and dtype conversion."""
+
+    # Short-circuit if possible
+    if aggregate_grads == "none" and not unit_normalize:
+        return {name: grad_dict[name].to(device=device) for name in grad_column_names}
+
+    grads = {
+        name: grad_dict[name].to(device=device, dtype=torch.float32)
+        for name in grad_column_names
+    }
+
+    # Per-item unit normalization
+    if unit_normalize:
+        norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
+        grads = {k: v / norms for k, v in grads.items()}
+
+    # Aggregate across items
+    if aggregate_grads == "mean":
+        grads = {name: grads[name].mean(0, keepdim=True) for name in grad_column_names}
+    elif aggregate_grads == "sum":
+        grads = {name: grads[name].sum(0, keepdim=True) for name in grad_column_names}
+    elif aggregate_grads != "none":
+        raise ValueError(f"Invalid aggregate_grads: {aggregate_grads}")
+
+    # Normalize the aggregated gradient
+    if normalize_aggregated_grad:
+        grad_norm = torch.cat(
+            [grads[name].flatten() for name in grad_column_names], dim=0
+        ).norm()
+        for name in grad_column_names:
+            grads[name] /= grad_norm
+
+    return grads

@@ -80,12 +80,8 @@ class TokenBuilder(Builder):
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
         *,
-        attribute_tokens: bool = False,
-        path: Path | None = None,
-        reduce_cfg: ReduceConfig | None = None,
-        preprocess_cfg: PreprocessConfig | None = None,
+        path: Path,
     ):
-        assert path is not None
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         np_dtype = convert_dtype_to_np(dtype)
@@ -127,6 +123,9 @@ class TokenBuilder(Builder):
                 row += sl
             col_offset += dim
 
+    def teardown(self):
+        self.flush()
+
 
 class InMemorySequenceBuilder(Builder):
     """Stores per-example gradients in memory.
@@ -157,8 +156,6 @@ class InMemorySequenceBuilder(Builder):
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
         *,
-        attribute_tokens: bool = False,
-        path: Path | None = None,
         reduce_cfg: ReduceConfig | None = None,
         preprocess_cfg: PreprocessConfig | None = None,
     ):
@@ -293,11 +290,6 @@ class InMemoryTokenBuilder(Builder):
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
-        *,
-        attribute_tokens: bool = False,
-        path: Path | None = None,
-        reduce_cfg: ReduceConfig | None = None,
-        preprocess_cfg: PreprocessConfig | None = None,
     ):
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
@@ -356,12 +348,10 @@ class SequenceBuilder(Builder):
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
         *,
-        attribute_tokens: bool = False,
-        path: Path | None = None,
+        path: Path,
         reduce_cfg: ReduceConfig | None = None,
         preprocess_cfg: PreprocessConfig | None = None,
     ):
-        assert path is not None
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         self.reduce_cfg = reduce_cfg
@@ -484,16 +474,22 @@ def create_builder(
     * no ``path``                           → :class:`InMemorySequenceBuilder`
     """
     if path is not None:
-        cls = TokenBuilder if attribute_tokens else SequenceBuilder
-    else:
-        cls = InMemoryTokenBuilder if attribute_tokens else InMemorySequenceBuilder
-
-    return cls(
+        if attribute_tokens:
+            return TokenBuilder(data, grad_sizes, dtype, path=path)
+        return SequenceBuilder(
+            data,
+            grad_sizes,
+            dtype,
+            path=path,
+            reduce_cfg=reduce_cfg,
+            preprocess_cfg=preprocess_cfg,
+        )
+    if attribute_tokens:
+        return InMemoryTokenBuilder(data, grad_sizes, dtype)
+    return InMemorySequenceBuilder(
         data,
         grad_sizes,
         dtype,
-        attribute_tokens=attribute_tokens,
-        path=path,
         reduce_cfg=reduce_cfg,
         preprocess_cfg=preprocess_cfg,
     )

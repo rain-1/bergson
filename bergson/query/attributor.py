@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Literal
 
 import torch
 from torch import Tensor, nn
@@ -39,6 +39,9 @@ class TraceResult:
 
 
 class Attributor:
+
+    precondition: Literal["one-sided", "two-sided", "none"]
+
     def __init__(
         self,
         index_path: str | Path,
@@ -51,24 +54,47 @@ class Attributor:
         self.device = device
         self.dtype = dtype
         self.unit_norm = unit_norm
-        self.precondition = precondition
+
+        if precondition and unit_norm:
+            self.precondition = "two-sided"
+        elif precondition:
+            self.precondition = "one-sided"
+        else:
+            self.precondition = "none"
+
         self.faiss_index = None
         index_path = Path(index_path)
 
         # Load the gradient processor
         self.processor = GradientProcessor.load(index_path, map_location=device)
 
+        # Precompute preconditioners
+        self.h_inv: dict[str, Tensor] = {}
+        for name, H in self.processor.preconditioners.items():
+            if "two-sided":
+                # Two-sided: precompute H^(-1) for two-sided application
+                self.h_inv[name] = damped_psd_power(H, power=-0.5).to(device)
+            elif "one-sided":
+                # One-sided: precompute H^(-1) for query-side application in search()
+                self.h_inv[name] = damped_psd_power(H, power=-1.0).to(device)
+
         # Load the gradients into a FAISS index
         if faiss_cfg:
             faiss_index_name = (
                 f"faiss_{faiss_cfg.index_factory.replace(',', '_')}"
                 f"{'_cosine' if unit_norm else ''}"
+                f"{'_precondition' if precondition else ''}"
             )
             faiss_path = index_path / faiss_index_name
 
             if not (faiss_path / "config.json").exists():
                 FaissIndex.create_index(
-                    index_path, faiss_path, faiss_cfg, device, unit_norm
+                    index_path,
+                    faiss_path,
+                    faiss_cfg,
+                    device,
+                    unit_norm,
+                    self.h_inv,
                 )
 
             self.faiss_index = FaissIndex(
@@ -90,23 +116,18 @@ class Attributor:
 
         self.ordered_modules = mmap.dtype.names
 
-        # Precompute preconditioners
-        self.h_inv: dict[str, Tensor] = {}
-        if precondition and unit_norm:
-            # Split: apply H^(-1/2) to index grads before normalization
-            for name in self.grads:
-                if name in self.processor.preconditioners:
-                    h_inv = damped_psd_power(
-                        self.processor.preconditioners[name], power=-0.5
-                    )
-                    self.grads[name] = self.grads[name].float() @ h_inv.to(device)
-                    self.grads[name] = self.grads[name].to(dtype=dtype)
-        elif precondition:
-            # One-sided: precompute H^(-1) for query-side application in search()
-            for name, H in self.processor.preconditioners.items():
-                self.h_inv[name] = damped_psd_power(H, power=-1).to(device)
-
         if unit_norm:
+            if precondition:
+                # Split: apply H^(-1/2) to index grads before normalization,
+                # for TrackStar
+                for name in self.grads:
+                    if name in self.processor.preconditioners:
+                        h_inv = damped_psd_power(
+                            self.processor.preconditioners[name], power=-0.5
+                        )
+                        self.grads[name] = self.grads[name].float() @ h_inv.to(device)
+                        self.grads[name] = self.grads[name].to(dtype=dtype)
+
             norm = torch.cat(
                 [self.grads[name] for name in self.ordered_modules], dim=1
             ).norm(dim=1, keepdim=True)
@@ -150,13 +171,14 @@ class Attributor:
             for name in self.ordered_modules
         }
 
-        # One-sided preconditioning: apply H^(-1) to query
+        # One- or two-sided preconditioning: apply H^(-1) or H^(-0.5) to query
         if self.h_inv:
             for name in q:
                 if name in self.h_inv:
                     q[name] = q[name].float() @ self.h_inv[name]
                     q[name] = q[name].to(self.dtype)
 
+        # Preconditioning is applied inside TraceCollector
         if self.unit_norm:
             norm = torch.cat(list(q.values()), dim=1).norm(dim=1, keepdim=True)
 
@@ -217,8 +239,6 @@ class Attributor:
         collector = TraceCollector(
             model=module,
             processor=self.processor,
-            precondition=self.precondition,
-            unit_normalize=self.unit_norm,
             target_modules=modules,
             device=self.device,
             dtype=self.dtype,

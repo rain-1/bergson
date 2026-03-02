@@ -19,7 +19,6 @@ from bergson.gradients import (
 )
 from bergson.process_preconditioners import process_preconditioners
 from bergson.score.scorer import Scorer
-from bergson.utils.math import damped_psd_power
 from bergson.utils.utils import assert_type, get_gradient_dtype
 
 
@@ -297,12 +296,6 @@ class TraceCollector(HookCollectorBase):
     mod_grads: dict = field(default_factory=lambda: defaultdict(list))
     """Accumulated grads per module. Maps module name to list of gradient tensors."""
 
-    precondition: bool = False
-    """Whether to apply preconditioning via autocorrelation Hessian approximation."""
-
-    unit_normalize: bool = False
-    """When True, use split preconditioning (H^(-1/2)); otherwise one-sided (H^(-1))."""
-
     device: torch.device | str
     """Device to store collected gradients on."""
 
@@ -313,13 +306,6 @@ class TraceCollector(HookCollectorBase):
         self.save_dtype = get_gradient_dtype(self.model)
         self.lo = torch.finfo(self.save_dtype).min
         self.hi = torch.finfo(self.save_dtype).max
-
-        # Split preconditioning: precompute H^(-1/2) for query side
-        # One-sided (H^(-1)) is handled by the Attributor in search()
-        self.h_inv: dict[str, torch.Tensor] = {}
-        if self.precondition and self.unit_normalize:
-            for name, H in self.processor.preconditioners.items():
-                self.h_inv[name] = damped_psd_power(H, power=-0.5)
 
     def forward_hook(self, module: nn.Module, a: Float[Tensor, "N S I"]) -> None:
         """
@@ -389,9 +375,6 @@ class TraceCollector(HookCollectorBase):
             P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
-
-        if name in self.h_inv:
-            P = P.type_as(self.h_inv[name]) @ self.h_inv[name]
 
         # Store the gradient for later use
         self.mod_grads[name].append(P.to(self.device, self.dtype, non_blocking=True))

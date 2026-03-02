@@ -4,7 +4,6 @@ import shutil
 from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import torch
@@ -19,6 +18,7 @@ from bergson.data import (
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
+from bergson.process_grads import preprocess_grads
 from bergson.score.score_writer import (
     MemmapSequenceScoreWriter,
     MemmapTokenScoreWriter,
@@ -69,52 +69,6 @@ def create_scorer(
         attribute_tokens=attribute_tokens,
         preconditioner_path=preprocess_cfg.preconditioner_path,
     )
-
-
-def preprocess_grads(
-    grad_dict: dict[str, torch.Tensor],
-    grad_column_names: list[str],
-    unit_normalize: bool,
-    device: torch.device,
-    aggregate_grads: Literal["mean", "sum", "none"] = "none",
-    normalize_aggregated_grad: bool = False,
-) -> dict[str, torch.Tensor]:
-    """Preprocess the gradients. Returns a dictionary of preprocessed gradients
-    with shape [N, grad_dim] or [1, grad_dim]. Preprocessing includes some
-    combination of per-item unit normalization, aggregation, aggregated
-    gradient normalization, and dtype conversion."""
-
-    # Short-circuit if possible
-    if aggregate_grads == "none" and not unit_normalize:
-        return {name: grad_dict[name].to(device=device) for name in grad_column_names}
-
-    grads = {
-        name: grad_dict[name].to(device=device, dtype=torch.float32)
-        for name in grad_column_names
-    }
-
-    # Per-item unit normalization
-    if unit_normalize:
-        norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
-        grads = {k: v / norms for k, v in grads.items()}
-
-    # Aggregate across items
-    if aggregate_grads == "mean":
-        grads = {name: grads[name].mean(0, keepdim=True) for name in grad_column_names}
-    elif aggregate_grads == "sum":
-        grads = {name: grads[name].sum(0, keepdim=True) for name in grad_column_names}
-    elif aggregate_grads != "none":
-        raise ValueError(f"Invalid aggregate_grads: {aggregate_grads}")
-
-    # Normalize the aggregated gradient
-    if normalize_aggregated_grad:
-        grad_norm = torch.cat(
-            [grads[name].flatten() for name in grad_column_names], dim=0
-        ).norm()
-        for name in grad_column_names:
-            grads[name] /= grad_norm
-
-    return grads
 
 
 def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:

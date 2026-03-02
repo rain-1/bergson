@@ -392,7 +392,9 @@ def test_scorer_split_preconditioners(tmp_path: Path):
     assert not torch.allclose(scores_precond_norm, scores_inner_products)
 
     # Verify split math: H^(-1/2) applied to both sides + unit normalize
-    h_inv_sqrt = scorer_precond_norm.preconditioners["mod_a"]
+    mod_idx = scorer_precond_norm.modules.index("mod_a")
+    assert scorer_precond_norm.preconditioners is not None
+    h_inv_sqrt = scorer_precond_norm.preconditioners[mod_idx]
     q = query_grads["mod_a"] @ h_inv_sqrt  # preconditioned query
     g = index_grads["mod_a"] @ h_inv_sqrt  # preconditioned index
     g = g / g.norm(dim=1, keepdim=True)  # unit normalize
