@@ -277,7 +277,9 @@ def score_worker(
     score_device = torch.device(f"cuda:{rank}")
 
     if isinstance(ds, Dataset):
-        kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
+        kwargs["batches"] = allocate_batches(
+            ds["length"][:], index_cfg.token_batch_size
+        )
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
             ds,
