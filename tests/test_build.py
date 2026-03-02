@@ -81,9 +81,10 @@ def test_build_consistency(tmp_path: Path, model, dataset):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_split_attention_build(tmp_path: Path, model, dataset):
+    # tiny-Phi3 o_proj has shape [8, 8] -> split into 2 heads of size 4
     attention_cfgs = {
-        "h.0.attn.attention.out_proj": AttentionConfig(
-            num_heads=16, head_size=4, head_dim=2
+        "layers.0.self_attn.o_proj": AttentionConfig(
+            num_heads=2, head_size=4, head_dim=2
         ),
     }
 
@@ -100,6 +101,18 @@ def test_split_attention_build(tmp_path: Path, model, dataset):
     assert any(
         Path(cfg.partial_run_path).iterdir()
     ), "Expected artifacts in the temp run_path"
+
+    # Verify that per-head gradient columns exist and have non-zero values
+    index = load_gradients(cfg.partial_run_path)
+    module_names = index.dtype.names
+    head_modules = [n for n in module_names if "head_" in n]
+    assert (
+        len(head_modules) == 2
+    ), f"Expected 2 per-head gradient columns, got {len(head_modules)}: {head_modules}"
+    for head_name in head_modules:
+        assert (
+            index[head_name][0].sum().item() != 0.0
+        ), f"Gradient for {head_name} is all zeros"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

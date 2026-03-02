@@ -20,7 +20,8 @@ def test_GPTNeoX():
     print(temp_dir)
 
     config = AutoConfig.from_pretrained("trl-internal-testing/tiny-GPTNeoXForCausalLM")
-    model = AutoModelForCausalLM.from_config(config)
+    # Explicitly use float32 so the test isn't sensitive to the config's torch_dtype
+    model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.float32)
 
     tokens = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=model.device)
     inputs = dict(

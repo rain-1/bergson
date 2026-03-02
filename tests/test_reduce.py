@@ -95,7 +95,7 @@ def test_in_memory_reduce(tmp_path: Path):
     ds = setup_data_pipeline(index_cfg)
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, ds, index_cfg, target_modules)
-    batches = allocate_batches(ds["length"], index_cfg.token_batch_size)
+    batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
 
     collector = InMemoryCollector(
         model=model.base_model,  # type: ignore

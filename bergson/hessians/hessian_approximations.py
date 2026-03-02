@@ -160,7 +160,7 @@ def hessian_worker(
         "attention_cfgs": attention_cfgs,
     }
 
-    batches = allocate_batches(ds["length"], index_cfg.token_batch_size)
+    batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
     kwargs["batches"] = batches
     collect_hessians(**kwargs)
 

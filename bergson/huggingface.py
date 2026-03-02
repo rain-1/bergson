@@ -70,10 +70,6 @@ class GradientCollectorCallback(TrainerCallback):
         self.use_optimizer_state = use_optimizer_state
         self.order: list[dict] | None = [] if track_order else None
 
-        self.eval_grad_buffers: dict[str, np.memmap] = {}
-        self.eval_step_idxs: dict[str, int] = {}
-        self.eval_indices: dict[str, list[int]] = {}
-
         self.mod_grads = {}
         self.batch_indices: Tensor | None = None
 
@@ -137,7 +133,6 @@ class GradientCollectorCallback(TrainerCallback):
         state: TrainerState,
         control: TrainerControl,
         *,
-        eval_dataloader: DataLoader | dict[str, DataLoader],
         train_dataloader: DataLoader,
         **kwargs,
     ):
@@ -160,26 +155,6 @@ class GradientCollectorCallback(TrainerCallback):
         )
         self.train_step_idx = 0
 
-        # Set up the gradient buffers for the evaluation datasets
-        if eval_dataloader is None:
-            return
-        elif isinstance(eval_dataloader, dict):
-            eval_datasets = eval_dataloader
-        else:
-            eval_datasets = {"eval": eval_dataloader}
-
-        for dataset_name, dataloader in eval_datasets.items():
-            self.eval_grad_buffers[dataset_name] = create_index(
-                self.path / (dataset_name + epoch_suffix),
-                num_grads=len(dataloader),
-                grad_sizes=self.grad_sizes,
-                dtype=self.dtype,
-            )
-            self.eval_step_idxs[dataset_name] = 0
-            self.eval_indices[dataset_name] = [
-                i.item() for batch in dataloader for i in batch["_idx"]
-            ]
-
     def on_epoch_end(
         self,
         args: TrainingArguments,
@@ -198,12 +173,14 @@ class GradientCollectorCallback(TrainerCallback):
 
         # Ensure the gradients are written to disk
         self.train_grad_buffer.flush()
-        for eval_grad_buffer in self.eval_grad_buffers.values():
-            eval_grad_buffer.flush()
 
-    def on_forward_begin(self, _: torch.nn.Module, args, kwargs: dict):
-        # Record the original indices of this batch
-        self.batch_indices = kwargs.pop("_idx").to("cpu", non_blocking=True)
+    def on_forward_begin(self, module: torch.nn.Module, args, kwargs: dict):
+        # Always pop _idx to prevent it from being passed to the model
+        idx = kwargs.pop("_idx", None)
+
+        if module.training and idx is not None:
+            self.batch_indices = idx.to("cpu", non_blocking=True)
+
         return args, kwargs
 
     def on_module_backward(self, name: str, g: Tensor):
@@ -300,10 +277,6 @@ class GradientCollectorCallback(TrainerCallback):
                 normalizers[name] = norm
 
         proc.normalizers = normalizers
-
-    def on_prediction_step(self, args, state, control, **kwargs):
-        dataset_name = kwargs["inputs"]["dataset_name"]
-        self.write_grads(self.eval_grad_buffers[dataset_name])
 
     def on_train_end(
         self,
