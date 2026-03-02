@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.6.2 (2026-03-02)
+
+### Bug Fixes
+
+- Convert PyArrow Column to list in allocate_batches
+  ([`7fe4dd3`](https://github.com/EleutherAI/bergson/commit/7fe4dd32181c5bc7ce5684e452bc442862e22e7f))
+
+HuggingFace Dataset column access (ds["length"]) returns a PyArrow Column, not a Python list.
+  Iterating over it element-by-element (via sorted(), random indexing) is ~1000x slower than on a
+  native list. For 10M items this caused allocate_batches to hang for 13+ hours instead of
+  completing in ~17 seconds.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Convert PyArrow columns to list at callsites of allocate_batches
+  ([`5d734dc`](https://github.com/EleutherAI/bergson/commit/5d734dc23bb083819890ca17d1b44f377ae35d69))
+
+Move the list conversion out of allocate_batches (which types doc_lengths as list[int]) to the
+  callsites that pass HF Dataset columns. Use ds["length"][:] which returns a plain list[int].
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Remove redundant zero-fill loop in MemmapSequenceScoreWriter
+  ([`558829f`](https://github.com/EleutherAI/bergson/commit/558829f717f8679d517765d5c3d9beac2f2249b2))
+
+np.memmap w+ mode already creates a zero-filled file, making the per-field written flag
+  initialization loop unnecessary. For large datasets (10M+ items) with many query scores, the
+  strided writes through the structured dtype caused multi-hour hangs.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Use [:] instead of list() for consistency
+  ([`c76d131`](https://github.com/EleutherAI/bergson/commit/c76d131c357b6b8e7880da48b4640510ffe5a654))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.6.1 (2026-03-02)
 
 ### Bug Fixes
