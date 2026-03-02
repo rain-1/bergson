@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.6.1 (2026-03-02)
+
+### Bug Fixes
+
+- Unpin transformers by explicitly setting float32 dtype in tests
+  ([`0b6c226`](https://github.com/EleutherAI/bergson/commit/0b6c22615b7cce4ca62f71cb93847e3027fa68ba))
+
+Transformers 4.56+ changed from_config() to honor the config's torch_dtype field, causing test
+  models (tiny-GPTNeoX, tiny-Phi3) to be created in float16 instead of float32. This caused gradient
+  comparison tests to fail from reduced precision, not from any actual change in gradient collection
+  logic.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.6.0 (2026-02-17)
 
 ### Bug Fixes
