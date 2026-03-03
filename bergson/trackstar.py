@@ -51,7 +51,7 @@ def trackstar(
         query_path=query_precond_path,
         index_path=value_precond_path,
         output_path=mixed_precond_path,
-        mixing_coefficient=trackstar_cfg.mixing_coefficient,
+        target_downweight_components=trackstar_cfg.target_downweight_components,
     )
 
     # Step 4: Build per-item query gradient index

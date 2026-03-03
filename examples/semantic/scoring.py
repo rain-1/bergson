@@ -214,7 +214,6 @@ def compute_scores_with_bergson(
     output_path: Path | str,
     query_preconditioner_path: str | Path | None = None,
     index_preconditioner_path: str | Path | None = None,
-    mixing_coefficient: float = 0.99,
     unit_normalize: bool = True,
 ) -> None:
     """Run bergson score to compute pairwise similarities.
@@ -223,14 +222,13 @@ def compute_scores_with_bergson(
     scoring, use compute_scores_fast() instead.
 
     If both query_preconditioner_path and index_preconditioner_path are given,
-    they are mixed internally using mixing_coefficient before scoring.
+    they are mixed internally before scoring.
 
     Args:
         index_path: Path to the gradient index.
         output_path: Path to save scores.
         query_preconditioner_path: Optional path to query preconditioner.
         index_preconditioner_path: Optional path to index preconditioner.
-        mixing_coefficient: Weight for the query preconditioner when mixing.
         unit_normalize: Whether to unit normalize gradients.
     """
     output_path = Path(output_path)
@@ -249,7 +247,6 @@ def compute_scores_with_bergson(
             query_preconditioner_path,
             index_preconditioner_path,
             mixed_path,
-            mixing_coefficient=mixing_coefficient,
         )
         preconditioner_path = str(mixed_path)
     elif query_preconditioner_path:
