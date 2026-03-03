@@ -13,7 +13,6 @@ from .config import (
     ScoreConfig,
     TrackstarConfig,
 )
-from .gradients import GradientProcessor
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .reduce import reduce
