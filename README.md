@@ -9,6 +9,7 @@ We view attribution as a counterfactual question: **_If we "unlearned" this trai
 - On-the-fly queries. Query gradients without disk I/O overhead via a single pass over a dataset with a set of precomputed query gradients.
   - Experiment with multiple query strategies based on [LESS](https://arxiv.org/pdf/2402.04333).
   - Ideal for compression-free gradients.
+- Per-token scores.
 - Train‑time gradient collection. Capture gradients produced during training with a ~17% performance overhead.
 - Scalable. We use [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html), BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters.
 - Integrated with HuggingFace Transformers and Datasets. We also support on-disk datasets in a variety of formats.
