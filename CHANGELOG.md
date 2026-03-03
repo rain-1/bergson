@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-03-03)
+
+### Bug Fixes
+
+- Standardize trace collector preconditioning
+  ([`6a14e53`](https://github.com/EleutherAI/bergson/commit/6a14e534a403c72bae4a340009ab84d385b7928b))
+
+### Features
+
+- Enable trackstar
+  ([`2dd26d3`](https://github.com/EleutherAI/bergson/commit/2dd26d31fe4f88d1f2d19537958208b914cec2c8))
+
+
 ## v0.6.2 (2026-03-02)
 
 ### Bug Fixes
