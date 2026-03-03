@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.7.1 (2026-03-03)
+
+### Bug Fixes
+
+- Always compute mixing coefficient in Trackstar pipeline
+  ([`c990375`](https://github.com/EleutherAI/bergson/commit/c990375e69d309f348c489f9bfc9cf9cddc28f6d))
+
+Remove the conditional guard — lambda is always auto-computed from the preconditioner eigenvalues
+  since the cost is negligible.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.7.0 (2026-03-03)
 
 ### Bug Fixes
