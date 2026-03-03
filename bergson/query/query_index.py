@@ -3,7 +3,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Callable, Generator
 
 from transformers import AutoTokenizer
 
@@ -15,8 +15,12 @@ from bergson.utils.worker_utils import setup_model_and_peft
 
 
 @contextmanager
-def csv_recorder(path: str) -> Generator[Any | None, None, None]:
-    """Open a CSV file for appending query results, or yield None if no path given."""
+def csv_recorder(path: str) -> Generator[Callable | None, None, None]:
+    """Open a CSV file for appending query results, or yield None if no path given.
+
+    Yields a callable ``record(row)`` that writes a row and flushes immediately,
+    so data survives interrupted sessions.
+    """
     if not path:
         yield None
         return
@@ -24,11 +28,21 @@ def csv_recorder(path: str) -> Generator[Any | None, None, None]:
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Check whether headers are needed before opening in append mode,
+    # because tell() is unreliable in append mode on some platforms.
+    needs_header = not file_path.exists() or file_path.stat().st_size == 0
+
     with open(file_path, "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
-        if csv_file.tell() == 0:
+        if needs_header:
             writer.writerow(["query", "result", "result_index", "score"])
-        yield writer
+            csv_file.flush()
+
+        def record(row: list[Any]) -> None:
+            writer.writerow(row)
+            csv_file.flush()
+
+        yield record
 
 
 def query(
@@ -79,7 +93,7 @@ def query(
     # Get the device of the first model parameter for multi-GPU setups
     model_device = next(model.parameters()).device
 
-    with csv_recorder(query_cfg.record) as csv_writer:
+    with csv_recorder(query_cfg.record) as record:
         while True:
             query = input("Enter your query: ")
             if query.lower() == "exit":
@@ -117,5 +131,5 @@ def query(
 
                 print(f"{i + 1}: (distance: {score:.4f})")
 
-                if csv_writer is not None:
-                    csv_writer.writerow([query, text, idx_int, score])
+                if record is not None:
+                    record([query, text, idx_int, score])
