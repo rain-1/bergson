@@ -35,7 +35,7 @@ def csv_recorder(path: str) -> Generator[Callable | None, None, None]:
     with open(file_path, "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
         if needs_header:
-            writer.writerow(["query", "result", "result_index", "score"])
+            writer.writerow(["query", "direction", "result", "result_index", "score"])
             csv_file.flush()
 
         def record(row: list[Any]) -> None:
@@ -103,33 +103,42 @@ def query(
             inputs = tokenizer(query, return_tensors="pt").to(model_device)
             x = inputs["input_ids"]
 
+            # Retrieve both the highest and lowest influence samples
             with attr.trace(
                 model.base_model,
                 query_cfg.top_k,
                 modules=target_modules,
-                reverse=query_cfg.reverse,
-            ) as result:
+                reverse=False,
+            ) as top_result:
                 model(x, labels=x).loss.backward()
                 model.zero_grad()
 
-            # Print the results
-            mode = "Bottom" if query_cfg.reverse else "Top"
-            print(f"{mode} {query_cfg.top_k} results for '{query}':")
-            for i, (d, idx) in enumerate(
-                zip(result.scores.squeeze(), result.indices.squeeze())
-            ):
-                if idx.item() == -1:
-                    print("Found invalid result, skipping")
-                    continue
+            with attr.trace(
+                model.base_model,
+                query_cfg.top_k,
+                modules=target_modules,
+                reverse=True,
+            ) as bottom_result:
+                model(x, labels=x).loss.backward()
+                model.zero_grad()
 
-                idx_int = int(idx.item())
-                score = d.item()
-                text = str(ds[idx_int][query_cfg.text_field])  # type: ignore[arg-type]
-                print(text[:2000])
-                if len(text) > 2000:
-                    print(". . .")
+            for direction, result in [("Top", top_result), ("Bottom", bottom_result)]:
+                print(f"\n{direction} {query_cfg.top_k} results for '{query}':")
+                for i, (d, idx) in enumerate(
+                    zip(result.scores.squeeze(), result.indices.squeeze())
+                ):
+                    if idx.item() == -1:
+                        print("Found invalid result, skipping")
+                        continue
 
-                print(f"{i + 1}: (distance: {score:.4f})")
+                    idx_int = int(idx.item())
+                    score = d.item()
+                    text = str(ds[idx_int][query_cfg.text_field])  # type: ignore[arg-type]
+                    print(text[:2000])
+                    if len(text) > 2000:
+                        print(". . .")
 
-                if record is not None:
-                    record([query, text, idx_int, score])
+                    print(f"{i + 1}: (distance: {score:.4f})")
+
+                    if record is not None:
+                        record([query, direction, text, idx_int, score])
