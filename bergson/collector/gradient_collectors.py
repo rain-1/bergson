@@ -9,9 +9,9 @@ from datasets import Dataset, Value
 from jaxtyping import Float
 from torch import Tensor
 
+from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder, create_builder
+from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -45,6 +45,9 @@ class GradientCollector(HookCollectorBase):
 
     reduce_cfg: ReduceConfig | None = None
     """Configuration for in-run gradient reduction."""
+
+    preprocess_cfg: PreprocessConfig | None = None
+    """Configuration for gradient preprocessing."""
 
     builder: Builder | None = None
     """Handles writing gradients to disk. Created in setup() if save_index is True."""
@@ -95,6 +98,7 @@ class GradientCollector(HookCollectorBase):
                 attribute_tokens=self.cfg.attribute_tokens,
                 path=self.cfg.partial_run_path,
                 reduce_cfg=self.reduce_cfg,
+                preprocess_cfg=self.preprocess_cfg,
             )
         else:
             self.builder = None
@@ -250,15 +254,13 @@ class GradientCollector(HookCollectorBase):
                 self.rank,
             )
 
-        # Flush and reduce builder if it exists
-        if self.builder is not None:
-            self.builder.flush()
-            self.builder.dist_reduce()
+        if self.builder:
+            self.builder.teardown()
 
         if self.rank == 0:
-            if self.reduce_cfg is not None:
+            if self.reduce_cfg:
                 # Create a new dataset with one row for each reduced gradient
-                assert self.builder is not None
+                assert self.builder
                 self.data = Dataset.from_list(
                     [
                         {"query_index": i}
@@ -293,12 +295,6 @@ class TraceCollector(HookCollectorBase):
 
     mod_grads: dict = field(default_factory=lambda: defaultdict(list))
     """Accumulated grads per module. Maps module name to list of gradient tensors."""
-
-    eps: float = 1e-6
-    """Epsilon for numerical stability in preconditioning."""
-
-    precondition: bool = False
-    """Whether to apply preconditioning via autocorrelation Hessian approximation."""
 
     device: torch.device | str
     """Device to store collected gradients on."""
@@ -379,14 +375,6 @@ class TraceCollector(HookCollectorBase):
             P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
-
-        # Precondition the gradient using Cholesky solve
-        # TODO: Should damp here?
-        if self.precondition:
-            eigval, eigvec = self.processor.preconditioners_eigen[name]
-            eigval_inverse_sqrt = 1.0 / (eigval + self.eps).sqrt()
-            prec = eigvec * eigval_inverse_sqrt @ eigvec.mT
-            P = P.type_as(prec) @ prec  # <- apply to P
 
         # Store the gradient for later use
         self.mod_grads[name].append(P.to(self.device, self.dtype, non_blocking=True))

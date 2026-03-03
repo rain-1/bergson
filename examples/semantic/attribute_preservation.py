@@ -729,7 +729,7 @@ def score_attribute_eval(
 
     from bergson.data import load_gradients
     from bergson.gradients import GradientProcessor
-    from bergson.utils.math import compute_damped_inverse
+    from bergson.utils.math import damped_psd_power
 
     base_path = Path(base_path)
     index_path = base_path / "index"
@@ -792,7 +792,7 @@ def score_attribute_eval(
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
             H = proc.preconditioners[name].to(device=device)
-            h_inv[name] = compute_damped_inverse(H, damping_factor=damping_factor)
+            h_inv[name] = damped_psd_power(H, power=-1, damping_factor=damping_factor)
 
     def load_grad_as_float(grads: np.memmap, name: str) -> np.ndarray:
         g = grads[name]
@@ -1765,7 +1765,7 @@ def score_majority_style_eval(
 
     from bergson.data import load_gradients
     from bergson.gradients import GradientProcessor
-    from bergson.utils.math import compute_damped_inverse
+    from bergson.utils.math import damped_psd_power
 
     base_path = Path(base_path)
     index_path = base_path / "index"
@@ -1818,7 +1818,7 @@ def score_majority_style_eval(
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
             H = proc.preconditioners[name].to(device=device)
-            h_inv[name] = compute_damped_inverse(H, damping_factor=damping_factor)
+            h_inv[name] = damped_psd_power(H, power=-1, damping_factor=damping_factor)
 
     def load_grad_as_float(grads: np.memmap, name: str) -> np.ndarray:
         g = grads[name]
