@@ -17,24 +17,12 @@ We view attribution as a counterfactual question: **_If we "unlearned" this trai
 
 # Announcements
 
+**February 2026**
+- Support per-token gradients
+
 **January 2026**
 - Support EK-FAC
 - [Experimental] Support distributing preconditioners across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedPreconditioners. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
-
-**October 2025**
-- Support bias parameter gradients in linear modules: https://github.com/EleutherAI/bergson/pull/54
-- Support convolution modules: https://github.com/EleutherAI/bergson/pull/50
-- Query datasets on-the-fly: https://github.com/EleutherAI/bergson/pull/47
-
-**September 2025**
-- Save per-head attention gradients: https://github.com/EleutherAI/bergson/pull/40
-- Eigendecompose preconditioners: https://github.com/EleutherAI/bergson/pull/34
-- Dr. GRPO-based loss gradients: https://github.com/EleutherAI/bergson/pull/35
-- Choose between summing and averaging losses across tokens: https://github.com/EleutherAI/bergson/pull/36
-- Save the order training data is seen in while using the gradient collector callback for HF's Trainer/SFTTrainer: https://github.com/EleutherAI/bergson/pull/40
-  - Saving training gradients adds a ~17% wall clock overhead
-- Improved static index build ETA accuracy: https://github.com/EleutherAI/bergson/pull/41
-- Several small quality of life improvements for querying indexes: https://github.com/EleutherAI/bergson/pull/38
 
 # Installation
 
