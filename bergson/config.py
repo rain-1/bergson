@@ -256,6 +256,9 @@ class QueryConfig:
     faiss: bool = False
     """Whether to use FAISS for the query."""
 
+    top_k: int = 5
+    """Number of top (and bottom) results to return per query."""
+
     reverse: bool = False
     """Whether to return results in reverse order
     (lowest influences instead of highest)."""

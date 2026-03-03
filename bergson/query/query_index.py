@@ -90,14 +90,17 @@ def query(
             x = inputs["input_ids"]
 
             with attr.trace(
-                model.base_model, 5, modules=target_modules, reverse=query_cfg.reverse
+                model.base_model,
+                query_cfg.top_k,
+                modules=target_modules,
+                reverse=query_cfg.reverse,
             ) as result:
                 model(x, labels=x).loss.backward()
                 model.zero_grad()
 
             # Print the results
             mode = "Bottom" if query_cfg.reverse else "Top"
-            print(f"{mode} 5 results for '{query}':")
+            print(f"{mode} {query_cfg.top_k} results for '{query}':")
             for i, (d, idx) in enumerate(
                 zip(result.scores.squeeze(), result.indices.squeeze())
             ):
