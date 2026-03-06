@@ -13,7 +13,7 @@ import torch.distributed.checkpoint as dcp
 import torchopt
 from datasets import Dataset
 from torch import nn
-from torchopt.pytree import tree_iter
+from torchopt.pytree import tree_iter, tree_map
 from torchopt.typing import GradientTransformation, OptState
 from tqdm.auto import tqdm
 
@@ -77,6 +77,13 @@ class DataStream:
                 f"Batch size {self.batch_size} must be divisible by world size "
                 f"{self.world_size}"
             )
+
+        needed = self.batch_size * self.num_batches
+        assert len(self.dataset) >= needed, (
+            f"Dataset has {len(self.dataset)} examples but {self.num_batches} "
+            f"batches of size {self.batch_size} require {needed}. "
+            f"Pass a larger split or reduce --num_batches."
+        )
 
         n = self.batch_size * self.num_batches
         self.weights = nn.Parameter(torch.ones(n, device=device))
@@ -160,7 +167,6 @@ class TrainerState:
         dcp.load(
             self.state_dict(),
             checkpoint_id=path,
-            no_dist=not dist.is_initialized(),
         )
 
     def save(self, path: str) -> Future:
@@ -171,26 +177,29 @@ class TrainerState:
         else:
             grp = None
 
+        def _done_callback(fut, g=grp):
+            if g is not None:
+                dist.destroy_process_group(g)
+
         fut = dcp.async_save(
             self.state_dict(),
             checkpoint_id=path,
-            no_dist=grp is None,
             process_group=grp,
         )
         assert isinstance(fut, Future)
-
-        fut.add_done_callback(
-            lambda _, g=grp: dist.destroy_process_group(g) if g else None
-        )
+        fut.add_done_callback(_done_callback)
         return fut
 
     def detach_(self):
-        for p in self.params.values():
-            p.detach_()
+        for k, p in self.params.items():
+            self.params[k] = p.detach()
 
-        for t in tree_iter(self.opt_state):
+        def _detach_leaf(t):
             if isinstance(t, torch.Tensor) and t.is_floating_point():
-                t.detach_()
+                return t.detach()
+            return t
+
+        self.opt_state = tree_map(_detach_leaf, self.opt_state)
 
     @property
     def requires_grad(self) -> bool:
@@ -335,7 +344,7 @@ class Trainer:
         chunk_size = math.isqrt(len(data)) if save_mode == "sqrt" else 1
         last_start = len(data) - chunk_size
 
-        save_futures: list[Future] = []
+        pending_fut: Future | None = None
 
         main = not dist.is_initialized() or dist.get_rank() != 0
         pbar = tqdm(data, desc="Training", disable=main)
@@ -344,15 +353,19 @@ class Trainer:
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
             # any updates, step 1 is the state after the first update, etc.
             if save_dir and (i % chunk_size == 0 or i >= last_start):
-                p = os.path.join(save_dir, f"step_{i}.ckpt")
+                # Wait for the previous save before starting a new one to avoid
+                # multiple concurrent DCP saves with separate Gloo groups, which can
+                # deadlock when background threads call distributed operations.
+                if pending_fut is not None:
+                    pending_fut.result()
 
-                fut = state.save(p)
-                save_futures.append(fut)
+                p = os.path.join(save_dir, f"step_{i}.ckpt")
+                pending_fut = state.save(p)
 
             state = self.step(state, x, inplace=inplace, trace=trace)
 
-        for fut in save_futures:
-            fut.result()  # wait for all checkpoints to finish saving
+        if pending_fut is not None:
+            pending_fut.result()
 
         return state
 
@@ -378,6 +391,10 @@ class Trainer:
             idx, path = ckpt_list[-1]
             fwd_state.batch_index = idx
             fwd_state.load(path)
+
+            # Detach after loading so that replay steps can use in-place ops
+            # (loaded tensors may retain requires_grad from the previous traced step)
+            fwd_state.detach_()
 
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
