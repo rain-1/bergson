@@ -21,7 +21,7 @@ dependencies = [
     "pyarrow",
     "simple-parsing",
     "torch",
-    "transformers"
+    "transformers",
     "torchopt",
 ]
 version = "0.8.0"

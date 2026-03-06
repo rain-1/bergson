@@ -2,6 +2,7 @@ import math
 import os
 import re
 from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from shutil import rmtree
 from typing import Literal
@@ -14,9 +15,10 @@ from datasets import Dataset
 from torch import nn
 from torchopt.pytree import tree_iter
 from torchopt.typing import GradientTransformation, OptState
-from transformers import BaseImageProcessor
+from tqdm.auto import tqdm
 
 from .distributed import grad_tree, shallow_copy
+from .swap import swap_parameters
 
 
 def _maybe_get_cuda_rng_state() -> torch.Tensor:
@@ -56,18 +58,18 @@ class DataStream:
         num_batches: int = 0,
         *,
         device: torch.device | str = "cpu",
-        input_key: str | None = None,
+        input_key: str = "text",
+        max_length: int = 256,
     ):
         self.dataset = dataset
         self.processor = processor
+        self.input_key = input_key
+        self.max_length = max_length
 
         self.batch_size = batch_size
         self.device = device
         self.num_batches = num_batches or len(self.dataset) // self.batch_size
-        if input_key is None:
-            input_key = "img" if isinstance(processor, BaseImageProcessor) else "text"
 
-        self.input_key = input_key
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         if self.batch_size % self.world_size != 0:
@@ -91,29 +93,31 @@ class DataStream:
         if i < 0 or i >= self.num_batches:
             raise IndexError("DataStream index out of range")
 
-        x = self.dataset[i * self.batch_size : (i + 1) * self.batch_size]
-        w = self.weights[i * self.batch_size : (i + 1) * self.batch_size]
-
-        if isinstance(self.processor, BaseImageProcessor):
-            y = x.pop("label")
-
-            x = self.processor(
-                images=x[self.input_key],
-                return_tensors="pt",
+        # Fetch only this rank's interleaved slice of the batch directly from the
+        # dataset, avoiding tokenizing examples that will just be discarded.
+        indices = list(
+            range(
+                i * self.batch_size + self.rank,
+                (i + 1) * self.batch_size,
+                self.world_size,
             )
-            x["pixel_values"] = x["pixel_values"][self.rank :: self.world_size]
-            x["labels"] = torch.tensor(y[self.rank :: self.world_size])
-        else:
-            x = self.processor(
-                x[self.input_key],
-                max_length=512,
-                padding=True,
-                return_tensors="pt",
-                truncation=True,
-            )
-            x["input_ids"] = x["labels"] = x["input_ids"][self.rank :: self.world_size]
+        )
+        raw = self.dataset[indices]
 
-        x["example_weight"] = w[self.rank :: self.world_size]
+        # padding="max_length" ensures uniform shape across ranks without needing
+        # to process all ranks' examples together.
+        x = self.processor(
+            raw[self.input_key],
+            max_length=self.max_length,
+            padding="max_length",
+            return_tensors="pt",
+            truncation=True,
+        )
+        x["labels"] = x["input_ids"]
+        x["example_weight"] = self.weights[
+            i * self.batch_size
+            + self.rank : (i + 1) * self.batch_size : self.world_size
+        ]
         return {k: v.to(self.device) for k, v in x.items()}
 
     def __iter__(self):
@@ -151,28 +155,34 @@ class TrainerState:
     cuda_rng_state: torch.Tensor = field(default_factory=_maybe_get_cuda_rng_state)
     cpu_rng_state: torch.Tensor = field(default_factory=torch.random.get_rng_state)
 
-    @classmethod
-    def load(cls, path: str, **kwargs) -> "TrainerState":
-        # Check to see if this is a sharded checkpoint
-        if os.path.isdir(path):
-            # We had better be in distributed mode
-            if not dist.is_initialized():
-                print(
-                    "Warning: Loading rank 0 of a sharded checkpoint while "
-                    "torch.distributed is not initialized. This is probably not what "
-                    "you want."
-                )
-                rank = 0
-            else:
-                rank = dist.get_rank()
+    def load(self, path: str):
+        """Load state from a checkpoint file."""
+        dcp.load(
+            self.state_dict(),
+            checkpoint_id=path,
+            no_dist=not dist.is_initialized(),
+        )
 
-            path = os.path.join(path, f"rank_{rank}.shard")
+    def save(self, path: str) -> Future:
+        # Create a new process group so that we can overlap saves
+        if dist.is_initialized():
+            grp = dist.new_group(backend="gloo", group_desc=path)
+            assert isinstance(grp, dist.ProcessGroup)
+        else:
+            grp = None
 
-        # We need to set weights_only to False because torchopt uses some NamedTuple
-        # objects in OptState. We could potentially implement a custom deserialization
-        # function that converts these into dicts and converts back
-        state_dict = torch.load(path, **kwargs, weights_only=False)
-        return cls(**state_dict)
+        fut = dcp.async_save(
+            self.state_dict(),
+            checkpoint_id=path,
+            no_dist=grp is None,
+            process_group=grp,
+        )
+        assert isinstance(fut, Future)
+
+        fut.add_done_callback(
+            lambda _, g=grp: dist.destroy_process_group(g) if g else None
+        )
+        return fut
 
     def detach_(self):
         for p in self.params.values():
@@ -209,21 +219,15 @@ class TrainerState:
         ]
         return ps + os
 
-    def backward(
-        self,
-        loss: torch.Tensor,
-        weight_grads: torch.Tensor,
-        *,
-        create_graph: bool = False,
-    ) -> BackwardState:
-        """Compute gradient of loss wrt this trainer state."""
-        grads = grad_tree(loss, self.params, create_graph=create_graph)
-        opt_grads = [
-            torch.zeros_like(buf)
-            for buf in tree_iter(self.opt_state)
-            if isinstance(buf, torch.Tensor) and buf.is_floating_point()
-        ]
-        return BackwardState(grads, opt_grads, weight_grads)
+    @contextmanager
+    def activate(self, model: nn.Module):
+        cpu_state = torch.random.get_rng_state()
+        torch.random.set_rng_state(self.cpu_rng_state)
+
+        with swap_parameters(model, self.params, self.buffers, strict=True) as p:
+            yield p
+
+        torch.random.set_rng_state(cpu_state)
 
     def state_dict(self) -> dict:
         # Convert to dict manually because dataclasses.asdict does a deep copy
@@ -241,8 +245,15 @@ class Trainer:
     ) -> tuple["Trainer", TrainerState]:
         """Convenience method for initializing the trainer and state."""
         # Create new tensor objects for the parameters and buffers to ensure that they
-        # are not modified in place
-        params = shallow_copy(dict(model.named_parameters(remove_duplicate=False)))
+        # are not modified in place. Only trainable params go into the state; frozen
+        # params stay in the nn.Module.
+        params = shallow_copy(
+            {
+                k: v
+                for k, v in model.named_parameters(remove_duplicate=False)
+                if v.requires_grad
+            }
+        )
         buffers = shallow_copy(dict(model.named_buffers(remove_duplicate=False)))
         opt_state = optimizer.init(params)
 
@@ -250,8 +261,16 @@ class Trainer:
         return cls(model, optimizer), state
 
     def __init__(self, model: nn.Module, optimizer: GradientTransformation):
-        # "Hollow out" the model by moving trainable parameters to the meta device
-        self.model = model.to("meta")
+        # Move only trainable parameters to the meta device, leaving frozen params
+        # on device so they don't need to be managed by TrainerState.
+        for mod in model.modules():
+            for p_name, param in list(mod.named_parameters(recurse=False)):
+                if param.requires_grad:
+                    mod.register_parameter(
+                        p_name, nn.Parameter(param.data.to("meta"), requires_grad=True)
+                    )
+
+        self.model = model
         self.optimizer = optimizer
 
     def step(
@@ -264,30 +283,28 @@ class Trainer:
     ) -> TrainerState:
         torch.random.set_rng_state(state.cpu_rng_state)
 
-        # We keep the model on the meta device, so it's essential we use strict=True
-        # to ensure every single parameter is replaced by a real one from the state.
-        with torch.autocast(
-            "cuda",
-            dtype=torch.bfloat16,
-            enabled=torch.cuda.is_bf16_supported(),
+        # Trainable params live on the meta device and are swapped in from state.
+        # Frozen params remain on-device in the model and are left untouched.
+        with (
+            torch.autocast(
+                "cuda",
+                dtype=torch.bfloat16,
+                enabled=torch.cuda.is_bf16_supported(),
+            ),
+            swap_parameters(self.model, state.params, state.buffers) as params,
         ):
-            outputs = torch.func.functional_call(
-                self.model,
-                (state.params, state.buffers),
-                kwargs=inputs,
-                strict=True,
-            )
+            outputs = self.model(**inputs)
 
-        # Currently we support two output types: HuggingFace, and "raw loss"
-        # - HuggingFace models output a dict/dataclass with a "loss" field
-        # - Raw loss models output a single scalar loss value as a Tensor
-        if hasattr(outputs, "loss"):
-            loss = outputs.loss
-        else:
-            loss = outputs
+            # Currently we support two output types: HuggingFace, and "raw loss"
+            # - HuggingFace models output a dict/dataclass with a "loss" field
+            # - Raw loss models output a single scalar loss value as a Tensor
+            if hasattr(outputs, "loss"):
+                loss = outputs.loss
+            else:
+                loss = outputs
 
-        assert isinstance(loss, torch.Tensor), "Loss must be a Tensor"
-        grads = grad_tree(loss, state.params, create_graph=trace)
+            assert isinstance(loss, torch.Tensor), "Loss must be a Tensor"
+            grads = grad_tree(loss, params, create_graph=trace)
 
         updates, new_state = self.optimizer.update(
             grads, state.opt_state, inplace=inplace, params=state.params
@@ -318,36 +335,18 @@ class Trainer:
         chunk_size = math.isqrt(len(data)) if save_mode == "sqrt" else 1
         last_start = len(data) - chunk_size
 
-        grp = None
         save_futures: list[Future] = []
 
-        for i, x in enumerate(data):
+        main = not dist.is_initialized() or dist.get_rank() != 0
+        pbar = tqdm(data, desc="Training", disable=main)
+
+        for i, x in enumerate(pbar):
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
             # any updates, step 1 is the state after the first update, etc.
             if save_dir and (i % chunk_size == 0 or i >= last_start):
                 p = os.path.join(save_dir, f"step_{i}.ckpt")
 
-                # Create a new process group so that we can overlap saves
-                if dist.is_initialized():
-                    grp = dist.new_group(backend="gloo", group_desc=f"step_{i}")
-                    assert isinstance(grp, dist.ProcessGroup)
-                else:
-                    grp = None
-
-                fut = dcp.async_save(
-                    state.state_dict(),
-                    checkpoint_id=p,
-                    no_dist=grp is None,
-                    process_group=grp,
-                )
-                assert isinstance(fut, Future)
-
-                def callback(_, i=i, p=p, g=grp):
-                    print(f"Checkpoint {i} saved to {p}")
-                    if g:
-                        dist.destroy_process_group(g)
-
-                fut.add_done_callback(callback)
+                fut = state.save(p)
                 save_futures.append(fut)
 
             state = self.step(state, x, inplace=inplace, trace=trace)
@@ -365,6 +364,7 @@ class Trainer:
         fwd_state: TrainerState,
         *,
         cleanup: bool = True,
+        inplace: bool = False,
     ) -> BackwardState:
         ckpt_list = sorted_checkpoints(ckpt_dir)
         expected_idx, _ = ckpt_list[-1]
@@ -377,11 +377,7 @@ class Trainer:
 
             idx, path = ckpt_list[-1]
             fwd_state.batch_index = idx
-            dcp.load(
-                fwd_state.state_dict(),
-                checkpoint_id=path,
-                no_dist=not dist.is_initialized(),
-            )
+            fwd_state.load(path)
 
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
@@ -397,6 +393,7 @@ class Trainer:
                 fwd_state = self.step(
                     fwd_state,
                     data[fwd_state.batch_index],
+                    inplace=inplace,
                     trace=False,
                 )
                 idx += 1
@@ -406,28 +403,8 @@ class Trainer:
                     path = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
                     ckpt_list.append((idx, path))
 
-                    # Create a new process group so that we can overlap saves
-                    if dist.is_initialized():
-                        grp = dist.new_group(backend="gloo", group_desc=f"step_{idx}")
-                        assert isinstance(grp, dist.ProcessGroup)
-                    else:
-                        grp = None
-
-                    fut = dcp.async_save(
-                        fwd_state.state_dict(),
-                        checkpoint_id=path,
-                        no_dist=grp is None,
-                        process_group=grp,
-                    )
-                    assert isinstance(fut, Future)
-
-                    fut.add_done_callback(
-                        lambda _, g=grp: dist.destroy_process_group(g) if g else None
-                    )
+                    fut = fwd_state.save(path)
                     save_futures.append(fut)
-
-                fwd_state.detach_()
-                fwd_state.requires_grad = True
 
             # The index we expect on the next iteration is one less than the current
             expected_idx = idx - 1
@@ -478,19 +455,3 @@ class Trainer:
             fut.result()
 
         return bwd_state
-
-    def evaluate(self, state: TrainerState, inputs: dict) -> torch.Tensor:
-        torch.random.set_rng_state(state.cpu_rng_state)
-
-        outputs = torch.func.functional_call(
-            self.model,
-            (state.params, state.buffers),
-            kwargs=inputs,
-            strict=True,
-        )
-        if hasattr(outputs, "loss"):
-            loss = outputs.loss
-        else:
-            loss = outputs
-
-        return loss
