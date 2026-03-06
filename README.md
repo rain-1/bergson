@@ -180,6 +180,21 @@ pyright
 
 We use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) for releases.
 
+# Citation
+
+If you found Bergson useful in your research, please cite us:
+
+```bibtex
+@software{bergson,
+  author       = {EleutherAI},
+  title        = {Bergson: Mapping out the "memory" of neural nets with data attribution},
+  year         = {2026},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.XXXXXXX},
+  url          = {https://doi.org/10.5281/zenodo.XXXXXXX}
+}
+```
+
 # Support
 
 If you have suggestions, questions, or would like to collaborate, please email lucia@eleuther.ai or drop us a line in the #data-attribution channel of the EleutherAI Discord!
