@@ -2,7 +2,7 @@ import os
 import socket
 from collections import defaultdict
 from contextlib import nullcontext, redirect_stdout
-from typing import Any, Callable, Concatenate, ParamSpec
+from typing import Any, Callable, Concatenate, Mapping, ParamSpec
 
 import torch
 import torch.distributed as dist
@@ -27,7 +27,7 @@ from .config import DistributedConfig
 
 def grad_tree(
     outputs: torch.Tensor,
-    inputs: dict[str, torch.Tensor],
+    inputs: Mapping[str, torch.Tensor],
     grad_outputs: dict[str, torch.Tensor] | None = None,
     **kwargs,
 ) -> dict[str, torch.Tensor]:
@@ -89,20 +89,25 @@ def shallow_copy(tensor_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor
     for path, param in tensor_dict.items():
         tensor_to_paths[param].append(path)
 
+    # We reverse the list of paths so that when we pop from the front, we get the
+    # same order as the original dict. This is important for tied weights, since we
+    # want to make sure that all occurrences of a tied weight point to the same
+    # copied tensor.
+    tensor_to_paths = list(tensor_to_paths.items())
+    tensor_to_paths.reverse()
+
     # Use a while loop to avoid modifying the dict while iterating over it. We don't
     # want to hold onto both the original and copied versions of each parameter.
     tensor_dict = {}
     while tensor_to_paths:
-        t, paths = tensor_to_paths.popitem()
+        t, paths = tensor_to_paths.pop()
 
         if isinstance(t, DTensor):
             t2 = DTensor.from_local(t.to_local(), t.device_mesh, t.placements)
         else:
             t2 = torch.Tensor(t.data)
 
-        # Update all occurrences of this parameter in the model
         t2.requires_grad_(t.requires_grad)
-        # for path in paths:
         tensor_dict[paths[0]] = t2
 
     return tensor_dict

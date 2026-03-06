@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from datetime import timedelta
 
 import torch
@@ -6,53 +7,73 @@ import torch.distributed as dist
 import torchopt
 from datasets import load_dataset
 from scipy.stats import spearmanr
-from torch.distributed.tensor import (
-    init_device_mesh,
-)
+from simple_parsing import ArgumentParser
+from torch.distributed.tensor import init_device_mesh
+from torchopt.pytree import tree_iter
 from torchopt.typing import Numeric
-from transformers import (
-    AutoTokenizer,
-    ConvNextImageProcessor,
-    GPTNeoXConfig,
-    GPTNeoXForCausalLM,
-)
+from transformers import AutoTokenizer, GPTNeoXConfig, GPTNeoXForCausalLM
 
-from bergson.distributed import (
-    launch_distributed_run,
-    simple_fsdp,
-)
-from bergson.models import ResNetCIFAR
-from bergson.trainer import DataStream, Trainer
+from bergson.config import DistributedConfig
+from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp
+from bergson.trainer import BackwardState, DataStream, Trainer
 from bergson.utils.math import weighted_causal_lm_ce
 
-BASE = 1e-5
-WARMUP_STEPS = 10
-MODEL_NAME = "EleutherAI/pythia-2.8b"
-MODEL_TYPE = "text"
+
+@dataclass
+class RunConfig:
+    model_name: str = "EleutherAI/pythia-160m"
+    """HuggingFace model name."""
+
+    dataset_name: str = "EleutherAI/SmolLM2-135M-10B"
+    """HuggingFace dataset name."""
+
+    dataset_split: str = "train"
+    """Dataset split to use."""
+
+    grad_checkpointing: bool = False
+    """Whether to use gradient checkpointing during the forward pass."""
+
+    lr: float = 1e-5
+    """Base learning rate after warmup."""
+
+    warmup_steps: int = 10
+    """Number of warmup steps before applying base lr."""
+
+    batch_size: int = 8
+    """Per-device batch size."""
+
+    num_batches: int = 25
+    """Number of training batches."""
+
+    max_length: int = 256
+    """Maximum token sequence length."""
+
+    save_dir: str = "/mnt/ssd-3/nora/magic-ckpts"
+    """Directory to save forward pass checkpoints."""
+
+    num_subsets: int = 100
+    """Number of leave-one-out subsets for Spearman correlation."""
+
+    seed: int = 42
+    """Random seed for subset permutation."""
 
 
-def worker(global_rank: int, rank: int, world_size: int, dataset):
+def worker(global_rank: int, rank: int, world_size: int, dataset, run_cfg: RunConfig):
     torch.cuda.set_device(rank)
 
-    if MODEL_TYPE == "image":
-        model = ResNetCIFAR(10)
-        model.to(f"cuda:{rank}")
-
-        processor = ConvNextImageProcessor(
-            size=dict(shortest_edge=32),
+    cfg = GPTNeoXConfig.from_pretrained(run_cfg.model_name, revision="step0")
+    model = GPTNeoXForCausalLM(cfg)
+    model.set_attn_implementation("eager")
+    model.loss_function = weighted_causal_lm_ce
+    model.to(f"cuda:{rank}")
+    if run_cfg.grad_checkpointing:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs=dict(use_reentrant=False),
         )
-    else:
-        cfg = GPTNeoXConfig.from_pretrained(MODEL_NAME, revision="step0")
-        model = GPTNeoXForCausalLM(cfg)
-        model.set_attn_implementation("eager")
 
-        model.loss_function = weighted_causal_lm_ce
-        model.to(f"cuda:{rank}")
+    processor = AutoTokenizer.from_pretrained(run_cfg.model_name)
+    processor.pad_token = processor.eos_token
 
-        processor = AutoTokenizer.from_pretrained(MODEL_NAME)
-        processor.pad_token = processor.eos_token
-
-    # These should be set by the main process
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
         port = os.environ.get("MASTER_PORT", "29500")
@@ -65,46 +86,67 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
             timeout=timedelta(hours=1),
             world_size=world_size,
         )
-        # Shard the model
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
             model = simple_fsdp(model)
 
     def schedule(step: Numeric) -> Numeric:
-        # Warmup phase
-        if step < WARMUP_STEPS:
+        if step < run_cfg.warmup_steps:
             return 0.0
-
-        return BASE
+        return run_cfg.lr
 
     opt = torchopt.adamw(
         schedule,
         betas=(0.95, 0.975),
         eps_root=1e-8,
     )
-    trainer, state0 = Trainer.initialize(model, opt)
-    fwd_state = state0
+    trainer, fwd_state = Trainer.initialize(model, opt)
+
+    # save state0
+    path0 = os.path.join(run_cfg.save_dir, "state0.pt")
+    save_fut = fwd_state.save(path0)
 
     stream = DataStream(
-        dataset, processor, batch_size=8, num_batches=16, device=f"cuda:{rank}"
+        dataset,
+        processor,
+        batch_size=run_cfg.batch_size,
+        num_batches=run_cfg.num_batches,
+        device=f"cuda:{rank}",
+        max_length=run_cfg.max_length,
+    )
+    fwd_state = trainer.train(
+        fwd_state,
+        stream,
+        inplace=True,
+        save_dir=run_cfg.save_dir,
     )
 
-    # Use an arbitrary batch from the dataset as the test example
-    ex = stream[0]
-    del ex["example_weight"]
+    with fwd_state.activate(model) as params:
+        stream.requires_grad = True
 
-    folder = "/mnt/ssd-3/nora/magic-ckpts"
-    fwd_state = trainer.train(fwd_state, stream, save_dir=folder)
+        ex = stream[0]
+        del ex["example_weight"]
 
-    # Compute gradient of the test loss with respect to the final state
-    loss = trainer.evaluate(fwd_state, ex)
-    bwd_state = fwd_state.backward(loss, torch.zeros_like(stream.weights))
-    stream.requires_grad = True
+        loss = model(**ex).loss
+
+        grads = grad_tree(loss, params, create_graph=True)
+        opt_grads = [
+            torch.zeros_like(buf)
+            for buf in tree_iter(fwd_state.opt_state)
+            if isinstance(buf, torch.Tensor) and buf.is_floating_point()
+        ]
+        bwd_state = BackwardState(grads, opt_grads, torch.zeros_like(stream.weights))
 
     if world_size > 1:
         dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
-    bwd_state = trainer.backward(folder, stream, bwd_state, fwd_state)
+    bwd_state = trainer.backward(
+        run_cfg.save_dir,
+        stream,
+        bwd_state,
+        fwd_state,
+        inplace=True,
+    )
     if world_size > 1:
         dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.AVG)
     if global_rank == 0:
@@ -120,19 +162,23 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
     diffs = []
     score_sums = []
 
-    gen = torch.Generator().manual_seed(42)
+    gen = torch.Generator().manual_seed(run_cfg.seed)
     perm = torch.randperm(len(stream.weights), generator=gen)
-    subsets = perm.chunk(100)
+    subsets = perm.chunk(run_cfg.num_subsets)
+
+    save_fut.result()  # ensure state0 is saved before loading in loop
+    fwd_state.load(path0)
 
     for subset in subsets:
         stream.weights.fill_(1.0)
         stream.weights[subset] = 0.0
 
-        fwd_state = state0
         for x in stream:
             fwd_state = trainer.step(fwd_state, x)
 
-        loss = trainer.evaluate(fwd_state, stream[0])
+        with fwd_state.activate(model):
+            loss = model(**stream[0]).loss
+
         if world_size > 1:
             dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
@@ -147,12 +193,16 @@ def worker(global_rank: int, rank: int, world_size: int, dataset):
 
 
 def main():
-    if MODEL_TYPE == "image":
-        ds = load_dataset("cifar10", split="train")
-    else:
-        ds = load_dataset("EleutherAI/SmolLM2-135M-10B", split="train")
+    parser = ArgumentParser()
+    parser.add_arguments(RunConfig, dest="run_cfg")
+    parser.add_arguments(DistributedConfig, dest="dist_cfg")
+    args = parser.parse_args()
 
-    launch_distributed_run(MODEL_TYPE, worker, [ds])
+    run_cfg: RunConfig = args.run_cfg
+    dist_cfg: DistributedConfig = args.dist_cfg
+
+    ds = load_dataset(run_cfg.dataset_name, split=run_cfg.dataset_split)
+    launch_distributed_run("double_backward", worker, [ds, run_cfg], dist_cfg)
 
 
 if __name__ == "__main__":
