@@ -49,7 +49,7 @@ class InMemoryCollector(HookCollectorBase):
     mod_grads: dict = dc_field(default_factory=dict)
     """Temporary per-batch gradients keyed by module name."""
 
-    preprocess_cfg: PreprocessConfig | None = None
+    preprocess_cfg: PreprocessConfig = dc_field(default_factory=PreprocessConfig)
     """Configuration for gradient preprocessing."""
 
     builder: Builder | None = None
@@ -82,9 +82,9 @@ class InMemoryCollector(HookCollectorBase):
             )
 
         if self.cfg.attribute_tokens:
-            assert (
-                not self.preprocess_cfg or self.preprocess_cfg.aggregation == "none"
-            ), ("attribute_tokens is incompatible" " with reduce mode.")
+            assert self.preprocess_cfg.aggregation == "none", (
+                "attribute_tokens is incompatible" " with reduce mode."
+            )
 
         self.save_dtype = get_gradient_dtype(self.model)
         self.lo = torch.finfo(self.save_dtype).min
@@ -107,8 +107,8 @@ class InMemoryCollector(HookCollectorBase):
                 self.data,
                 grad_sizes,
                 self.save_dtype,
+                self.preprocess_cfg,
                 attribute_tokens=self.cfg.attribute_tokens,
-                preprocess_cfg=self.preprocess_cfg,
             )
 
     def teardown(self) -> None:
@@ -243,10 +243,7 @@ class InMemoryCollector(HookCollectorBase):
                 self.processor.preconditioners[name] = P.mT @ P
 
         # GPU for scorer/reduce, CPU for builder
-        if self.scorer is not None or (
-            self.preprocess_cfg is not None
-            and self.preprocess_cfg.aggregation != "none"
-        ):
+        if self.scorer is not None or self.preprocess_cfg.aggregation != "none":
             self.mod_grads[name] = P.to(dtype=self.save_dtype)
         else:
             self.mod_grads[name] = P.to(

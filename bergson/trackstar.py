@@ -54,8 +54,12 @@ def trackstar(
         target_downweight_components=trackstar_cfg.target_downweight_components,
     )
 
-    # Step 4: Build per-item query gradient index
+    # Step 4: Build query gradient index using query-specific normalizer.
+    # The mixed preconditioner is set here but only applied during build if the
+    # user is aggregating the query dataset (preprocess_cfg.aggregation != "none").
+    # Otherwise, preconditioning will be deferred to score time in step 5.
     print("Step 4/5: Building query gradient index...")
+    preprocess_cfg.preconditioner_path = mixed_precond_path
     query_cfg = deepcopy(index_cfg)
     query_cfg.run_path = query_path
     query_cfg.data = trackstar_cfg.query
@@ -71,6 +75,5 @@ def trackstar(
     score_index_cfg.processor_path = value_precond_path
     score_index_cfg.skip_preconditioners = True
     score_cfg.query_path = query_path
-    preprocess_cfg.preconditioner_path = mixed_precond_path
     validate_run_path(score_index_cfg)
     score_dataset(score_index_cfg, score_cfg, preprocess_cfg)

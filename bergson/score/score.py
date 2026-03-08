@@ -18,7 +18,10 @@ from bergson.data import (
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
-from bergson.process_grads import preprocess_grads
+from bergson.process_grads import (
+    get_trackstar_preconditioner,
+    normalize_and_aggregate_grads,
+)
 from bergson.score.score_writer import (
     MemmapSequenceScoreWriter,
     MemmapTokenScoreWriter,
@@ -38,7 +41,7 @@ from bergson.utils.worker_utils import (
 
 def get_query_grads(
     score_cfg: ScoreConfig,
-) -> tuple[dict[str, torch.Tensor], bool]:
+) -> tuple[dict[str, torch.Tensor], PreprocessConfig]:
     """
     Load query gradients from the mmap index and return as a dict of tensors.
 
@@ -59,7 +62,16 @@ def get_query_grads(
         metadata = json.load(f)
         target_modules = metadata["dtype"]["names"]
         grad_sizes = metadata["grad_sizes"]
-        query_preconditioned = metadata.get("preconditioned", False)
+
+    preprocess_path = Path(query_path / "preprocess_config.json")
+    if preprocess_path.exists():
+        with open(query_path / "preprocess_config.json", "r") as f:
+            preprocess_cfg = PreprocessConfig(**metadata)
+            # query_preconditioned = bool(metadata.get("preconditioner_path", False))
+    else:
+        preprocess_cfg = PreprocessConfig()
+
+        # query_preconditioned = False
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules
@@ -81,7 +93,33 @@ def get_query_grads(
         else:
             grads[name] = torch.from_numpy(sliced.copy())
 
-    return grads, query_preconditioned
+    return grads, preprocess_cfg
+
+
+def _make_split_preconditioner(
+    preconditioners: dict[str, torch.Tensor],
+    modules: list[str],
+    device: torch.device,
+    dtype: torch.dtype,
+):
+    """Build a per-batch index transform for split (two-sided) preconditioning."""
+    stacked = torch.stack([preconditioners[m] for m in modules])
+
+    def transform(
+        grads: dict[str, torch.Tensor],
+        _modules: list[str] = modules,
+        _stacked: torch.Tensor = stacked,
+        _device: torch.device = device,
+        _dtype: torch.dtype = dtype,
+    ) -> dict[str, torch.Tensor]:
+        g = torch.stack(
+            [grads[m].to(_device, _dtype, non_blocking=True) for m in _modules],
+            dim=1,
+        )
+        result = torch.bmm(g.permute(1, 0, 2), _stacked).permute(1, 0, 2)
+        return {m: result[:, i] for i, m in enumerate(_modules)}
+
+    return transform
 
 
 def create_scorer(
@@ -96,18 +134,67 @@ def create_scorer(
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring.
 
-    Loads query gradients from disk, preprocesses them, and constructs the
-    Scorer. Automatically detects whether the query was already preconditioned
-    (e.g. via reduce) to avoid double-preconditioning.
+    Loads query gradients from disk, preprocesses them if not already
+    preprocessed, and constructs the Scorer.
+
+    * Loads preconditioner from ``preprocess_cfg.preconditioner_path``.
+    * Applies to query grads once here (unless already preconditioned).
+    * Normalizes and aggregates (unless already done).
+    * Builds an ``index_transform`` closure for per-batch index
+      preconditioning in split mode (``unit_normalize=True``).
     """
-    query_grads, query_preconditioned = get_query_grads(score_cfg)
-    query_grads = preprocess_grads(
+    query_grads, query_preprocess_cfg = get_query_grads(score_cfg)
+
+    # Load preconditioner: H^(-1/2) for split, H^(-1) for one-sided
+    preconditioners = get_trackstar_preconditioner(
+        preprocess_cfg.preconditioner_path,
+        device=device,
+        power=-0.5 if preprocess_cfg.unit_normalize else -1,
+        return_dtype=dtype,
+    )
+
+    # Maybe precondition query grads if it hasn't already been applied, e.g.
+    # during reduce.
+    if preconditioners and not bool(query_preprocess_cfg.preconditioner_path):
+        query_grads = {
+            m: query_grads[m].to(device=device, dtype=dtype) @ preconditioners[m]
+            for m in score_cfg.modules
+        }
+
+    # Build index_transform for split (two-sided) preconditioning
+    index_transform = (
+        _make_split_preconditioner(
+            preconditioners,
+            score_cfg.modules,
+            device,
+            dtype,
+        )
+        if preconditioners and preprocess_cfg.unit_normalize
+        else lambda x: x
+    )
+
+    # Maybe apply aggregation if it hasn't already been applied.
+    normalize_aggregated_grad = (
+        False
+        if query_preprocess_cfg.normalize_aggregated_grad
+        else preprocess_cfg.normalize_aggregated_grad
+    )
+    aggregation = (
+        "none"
+        if query_preprocess_cfg.aggregation != "none"
+        else preprocess_cfg.aggregation
+    )
+    unit_normalize = (
+        False if query_preprocess_cfg.unit_normalize else preprocess_cfg.unit_normalize
+    )
+
+    query_grads = normalize_and_aggregate_grads(
         query_grads,
         score_cfg.modules,
-        unit_normalize=preprocess_cfg.unit_normalize,
+        unit_normalize=unit_normalize,
         device=device,
-        aggregate_grads="none",
-        normalize_aggregated_grad=False,
+        aggregate_grads=aggregation,
+        normalize_aggregated_grad=normalize_aggregated_grad,
     )
 
     num_queries = len(query_grads[score_cfg.modules[0]])
@@ -130,8 +217,7 @@ def create_scorer(
         unit_normalize=preprocess_cfg.unit_normalize,
         score_mode=score_cfg.score,
         attribute_tokens=attribute_tokens,
-        preconditioner_path=preprocess_cfg.preconditioner_path,
-        query_preconditioned=query_preconditioned,
+        index_transform=index_transform,
     )
 
 

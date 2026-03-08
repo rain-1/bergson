@@ -204,7 +204,7 @@ def precondition_grad(
     }
 
 
-def preprocess_grads(
+def normalize_and_aggregate_grads(
     grad_dict: dict[str, torch.Tensor],
     grad_column_names: list[str],
     unit_normalize: bool,

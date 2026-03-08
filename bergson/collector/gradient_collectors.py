@@ -43,7 +43,7 @@ class GradientCollector(HookCollectorBase):
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""
 
-    preprocess_cfg: PreprocessConfig | None = None
+    preprocess_cfg: PreprocessConfig = field(default_factory=PreprocessConfig)
     """Configuration for gradient preprocessing."""
 
     builder: Builder | None = None
@@ -69,7 +69,7 @@ class GradientCollector(HookCollectorBase):
 
         if self.cfg.attribute_tokens:
             assert (
-                self.preprocess_cfg is None or self.preprocess_cfg.aggregation == "none"
+                self.preprocess_cfg.aggregation == "none"
             ), "attribute_tokens is incompatible with reduce mode."
 
         self.save_dtype = get_gradient_dtype(self.model)
@@ -92,9 +92,9 @@ class GradientCollector(HookCollectorBase):
                 self.data,
                 grad_sizes,
                 self.save_dtype,
+                self.preprocess_cfg,
                 attribute_tokens=self.cfg.attribute_tokens,
                 path=self.cfg.partial_run_path,
-                preprocess_cfg=self.preprocess_cfg,
             )
         else:
             self.builder = None
@@ -209,9 +209,7 @@ class GradientCollector(HookCollectorBase):
             else:
                 self.processor.preconditioners[name] = P.mT @ P
 
-        if self.save_index and (
-            self.preprocess_cfg is None or self.preprocess_cfg.aggregation == "none"
-        ):
+        if self.save_index and self.preprocess_cfg.aggregation == "none":
             # Asynchronously move the gradient to CPU and convert to the final
             # dtype
             self.mod_grads[name] = P.to(
@@ -256,7 +254,7 @@ class GradientCollector(HookCollectorBase):
             self.builder.teardown()
 
         if self.rank == 0:
-            if self.preprocess_cfg and self.preprocess_cfg.aggregation != "none":
+            if self.preprocess_cfg.aggregation != "none":
                 # Create a new dataset with one row for each reduced gradient
                 assert self.builder
                 self.data = Dataset.from_list(

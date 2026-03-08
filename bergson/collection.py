@@ -30,7 +30,7 @@ def collect_gradients(
         target_modules=target_modules,
         data=data,
         scorer=scorer,
-        preprocess_cfg=preprocess_cfg,
+        preprocess_cfg=preprocess_cfg or PreprocessConfig(),
         attention_cfgs=attention_cfgs or {},
         filter_modules=cfg.filter_modules,
     )

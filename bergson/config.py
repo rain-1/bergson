@@ -279,10 +279,11 @@ class PreprocessConfig:
     """Path to a precomputed preconditioner."""
 
     aggregation: Literal["mean", "sum", "none"] = "none"
-    """Method for aggregating the gradients."""
+    """Method for aggregating the gradients. In score, only query
+    gradients will be aggregated."""
 
     normalize_aggregated_grad: bool = False
-    """Whether to unit normalize the reduced query gradient. This has
+    """Whether to unit normalize the aggregated gradient. This has
     no effect on future relative score rankings but does affect score
     magnitudes."""
 

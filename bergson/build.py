@@ -1,5 +1,4 @@
 import json
-import math
 import os
 import shutil
 from dataclasses import asdict
@@ -11,14 +10,16 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.collector.gradient_collectors import GradientCollector
 from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
-from bergson.utils.utils import assert_type
-from bergson.utils.worker_utils import setup_model_and_peft
-
-from .distributed import launch_distributed_run
-from .utils.worker_utils import create_processor, setup_data_pipeline
+from bergson.distributed import launch_distributed_run
+from bergson.utils.auto_batch_size import maybe_auto_batch_size
+from bergson.utils.utils import assert_type, setup_reproducibility
+from bergson.utils.worker_utils import (
+    create_processor,
+    setup_data_pipeline,
+    setup_model_and_peft,
+)
 
 
 def build_worker(
@@ -30,7 +31,8 @@ def build_worker(
     ds: Dataset | IterableDataset,
 ):
     """
-    Distributed worker that convert a dataset to an on-disk gradient index.
+    Build worker executed per rank to collect gradients to populate the
+    on-disk index.
 
     Parameters
     ----------
@@ -66,6 +68,8 @@ def build_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, ds, index_cfg, target_modules)
+
+    maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -113,39 +117,6 @@ def build_worker(
         if rank == 0:
             processor.save(index_cfg.partial_run_path)
 
-    # Save info.json for score command (if it doesn't already exist)
-    if rank == 0:
-        info_path = index_cfg.partial_run_path / "info.json"
-        if not info_path.exists():
-            # Create temporary collector to get shapes
-            shapes = GradientCollector(
-                model=model,
-                data=Dataset.from_list([]),
-                processor=processor,
-                cfg=index_cfg,
-                target_modules=target_modules,
-            ).shapes()
-
-            grad_sizes = {name: math.prod(s) for name, s in shapes.items()}
-
-            # Build dtype structure matching create_index format for consistency
-            struct_dtype = {
-                "names": list(grad_sizes.keys()),
-                "formats": [f"({size},)<f4" for size in grad_sizes.values()],
-                "itemsize": 4 * sum(grad_sizes.values()),
-            }
-
-            metadata = {
-                "num_grads": 1,
-                "dtype": struct_dtype,
-                "grad_sizes": grad_sizes,
-                "base_dtype": "float32",
-                "preconditioned": preprocess_cfg.preconditioner_path is not None,
-            }
-
-            with info_path.open("w") as f:
-                json.dump(metadata, f, indent=2)
-
 
 def build(
     index_cfg: IndexConfig,
@@ -163,9 +134,15 @@ def build(
         Preprocessing configuration for gradient normalization, preconditioning,
         and aggregation.
     """
+    if index_cfg.debug:
+        setup_reproducibility()
+
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
         json.dump(asdict(index_cfg), f, indent=2)
+
+    with (index_cfg.partial_run_path / "preprocess_config.json").open("w") as f:
+        json.dump(asdict(preprocess_cfg), f, indent=2)
 
     ds = setup_data_pipeline(index_cfg)
 
