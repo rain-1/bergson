@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 from datasets import Dataset
 
-from .config import PreprocessConfig, ReduceConfig
+from .config import PreprocessConfig
 from .data import compute_num_token_grads, create_index, create_token_index
 from .process_grads import (
     get_trackstar_preconditioner,
@@ -133,7 +133,7 @@ class InMemorySequenceBuilder(Builder):
     Drop-in replacement for :class:`SequenceBuilder` that keeps
     gradients in a plain numpy array instead of a memory-mapped
     file.  Supports optional gradient reduction via
-    *reduce_cfg*.
+    *preprocess_cfg*.
 
     Parameters
     ----------
@@ -143,11 +143,9 @@ class InMemorySequenceBuilder(Builder):
         Per-module gradient dimensions.
     dtype : torch.dtype
         Torch dtype for the gradients.
-    reduce_cfg : ReduceConfig | None
-        When set, accumulate all gradients into a single
-        row (mean or sum) instead of storing per-example.
     preprocess_cfg : PreprocessConfig | None
-        When set, apply preconditioning/normalization during reduce.
+        When set, apply some combination of preconditioning,
+        normalization, and aggregation.
     """
 
     def __init__(
@@ -156,16 +154,14 @@ class InMemorySequenceBuilder(Builder):
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
         *,
-        reduce_cfg: ReduceConfig | None = None,
         preprocess_cfg: PreprocessConfig | None = None,
     ):
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
-        self.reduce_cfg = reduce_cfg
         self.preprocess_cfg = preprocess_cfg
         total_grad_dim = sum(grad_sizes.values())
 
-        if reduce_cfg is not None:
+        if self.preprocess_cfg and self.preprocess_cfg.aggregation != "none":
             np_dtype = np.float32
             num_grads = 1
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -200,7 +196,7 @@ class InMemorySequenceBuilder(Builder):
         mod_grads: dict[str, torch.Tensor],
     ):
         """Accumulate batch gradients into the reduce buffer."""
-        assert self.reduce_cfg is not None
+        assert self.preprocess_cfg and self.preprocess_cfg.aggregation != "none"
         assert self.in_memory_grad_buffer is not None
 
         # Precondition the gradients
@@ -220,7 +216,7 @@ class InMemorySequenceBuilder(Builder):
         indices: list[int],
         mod_grads: dict[str, torch.Tensor],
     ):
-        if self.reduce_cfg is not None:
+        if self.preprocess_cfg and self.preprocess_cfg.aggregation != "none":
             self.reduce(indices, mod_grads)
             return
 
@@ -236,7 +232,7 @@ class InMemorySequenceBuilder(Builder):
             offset += dim
 
     def teardown(self):
-        if self.reduce_cfg is None:
+        if not self.preprocess_cfg or self.preprocess_cfg.aggregation == "none":
             return
 
         assert self.in_memory_grad_buffer is not None
@@ -251,10 +247,10 @@ class InMemorySequenceBuilder(Builder):
                 op=dist.ReduceOp.SUM,
             )
 
-        if self.reduce_cfg.method == "mean":
+        if self.preprocess_cfg.aggregation == "mean":
             self.in_memory_grad_buffer /= self.num_items
 
-        if self.reduce_cfg.normalize_reduced_grad:
+        if self.preprocess_cfg.normalize_aggregated_grad:
             device = self.in_memory_grad_buffer.device
             self.in_memory_grad_buffer = normalize_flat_grad(
                 self.in_memory_grad_buffer, device
@@ -340,8 +336,6 @@ class SequenceBuilder(Builder):
 
     num_items: int
 
-    reduce_cfg: ReduceConfig | None
-
     def __init__(
         self,
         data: Dataset,
@@ -349,15 +343,13 @@ class SequenceBuilder(Builder):
         dtype: torch.dtype,
         *,
         path: Path,
-        reduce_cfg: ReduceConfig | None = None,
         preprocess_cfg: PreprocessConfig | None = None,
     ):
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
-        self.reduce_cfg = reduce_cfg
         self.preprocess_cfg = preprocess_cfg
         self.rank = dist.get_rank() if dist.is_initialized() else 0
-        if reduce_cfg is not None:
+        if self.preprocess_cfg and self.preprocess_cfg.aggregation != "none":
             num_grads = 1
             np_dtype = np.float32
             self.in_memory_grad_buffer = torch.zeros(
@@ -390,7 +382,11 @@ class SequenceBuilder(Builder):
         )
 
     def reduce(self, indices: list[int], mod_grads: dict[str, torch.Tensor]):
-        assert self.reduce_cfg is not None and self.in_memory_grad_buffer is not None
+        assert (
+            self.preprocess_cfg
+            and self.preprocess_cfg.aggregation != "none"
+            and self.in_memory_grad_buffer is not None
+        )
 
         # Precondition the gradients
         mod_grads = precondition_grad(mod_grads, self.h_inv)
@@ -407,7 +403,7 @@ class SequenceBuilder(Builder):
     def __call__(self, indices: list[int], mod_grads: dict[str, torch.Tensor]):
         torch.cuda.synchronize()
 
-        if self.reduce_cfg is not None:
+        if self.preprocess_cfg and self.preprocess_cfg.aggregation != "none":
             self.reduce(indices, mod_grads)
         else:
             # It turns out that it's very important for efficiency to write the
@@ -423,7 +419,7 @@ class SequenceBuilder(Builder):
     def teardown(self):
         self.flush()
 
-        if self.reduce_cfg is None:
+        if self.preprocess_cfg is None or self.preprocess_cfg.aggregation == "none":
             return
 
         assert self.in_memory_grad_buffer is not None
@@ -433,11 +429,11 @@ class SequenceBuilder(Builder):
         if dist.is_initialized():
             dist.reduce(self.in_memory_grad_buffer, dst=0, op=dist.ReduceOp.SUM)
 
-        if self.reduce_cfg.method == "mean":
+        if self.preprocess_cfg and self.preprocess_cfg.aggregation == "mean":
             self.in_memory_grad_buffer /= self.num_items
 
         # Unit normalize the reduced gradient
-        if self.reduce_cfg.normalize_reduced_grad:
+        if self.preprocess_cfg and self.preprocess_cfg.normalize_aggregated_grad:
             device = self.in_memory_grad_buffer.device
             self.in_memory_grad_buffer = normalize_flat_grad(
                 self.in_memory_grad_buffer, device
@@ -461,7 +457,6 @@ def create_builder(
     *,
     attribute_tokens: bool = False,
     path: Path | None = None,
-    reduce_cfg: ReduceConfig | None = None,
     preprocess_cfg: PreprocessConfig | None = None,
 ) -> Builder:
     """Create the appropriate :class:`Builder` subclass.
@@ -481,7 +476,6 @@ def create_builder(
             grad_sizes,
             dtype,
             path=path,
-            reduce_cfg=reduce_cfg,
             preprocess_cfg=preprocess_cfg,
         )
     if attribute_tokens:
@@ -490,6 +484,5 @@ def create_builder(
         data,
         grad_sizes,
         dtype,
-        reduce_cfg=reduce_cfg,
         preprocess_cfg=preprocess_cfg,
     )

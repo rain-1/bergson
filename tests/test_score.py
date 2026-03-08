@@ -13,7 +13,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from bergson.collector.collector import CollectorComputer
 from bergson.collector.gradient_collectors import GradientCollector
 from bergson.collector.in_memory_collector import InMemoryCollector
-from bergson.config import IndexConfig, ReduceConfig
+from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import create_index
 from bergson.gradients import GradientProcessor
 from bergson.process_grads import get_trackstar_preconditioner
@@ -89,7 +89,7 @@ def test_score(tmp_path: Path, model, dataset):
     processor = GradientProcessor(projection_dim=16)
 
     # Step 1: Reduce query gradients using InMemoryCollector
-    reduce_cfg = ReduceConfig(method="mean")
+    preprocess_cfg = PreprocessConfig(aggregation="mean")
     reduce_index_cfg = IndexConfig(
         run_path=str(tmp_path / "reduce"), token_batch_size=1024
     )
@@ -100,7 +100,7 @@ def test_score(tmp_path: Path, model, dataset):
         data=dataset,
         cfg=reduce_index_cfg,
         processor=processor,
-        reduce_cfg=reduce_cfg,
+        preprocess_cfg=preprocess_cfg,
     )
 
     computer = CollectorComputer(

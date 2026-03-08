@@ -9,7 +9,6 @@ from .config import (
     IndexConfig,
     PreprocessConfig,
     QueryConfig,
-    ReduceConfig,
     ScoreConfig,
     TrackstarConfig,
 )
@@ -27,8 +26,6 @@ class Build:
 
     index_cfg: IndexConfig
 
-    preprocess_cfg: PreprocessConfig
-
     def execute(self):
         """Build the gradient index."""
         if self.index_cfg.skip_index and self.index_cfg.skip_preconditioners:
@@ -36,7 +33,7 @@ class Build:
 
         validate_run_path(self.index_cfg)
 
-        build(self.index_cfg, self.preprocess_cfg)
+        build(self.index_cfg)
 
 
 @dataclass
@@ -45,14 +42,12 @@ class Preconditioners:
 
     index_cfg: IndexConfig
 
-    preprocess_cfg: PreprocessConfig
-
     def execute(self):
         """Compute normalizers and preconditioners."""
         self.index_cfg.skip_index = True
         self.index_cfg.skip_preconditioners = False
         validate_run_path(self.index_cfg)
-        build(self.index_cfg, self.preprocess_cfg)
+        build(self.index_cfg)
 
 
 @dataclass
@@ -60,8 +55,6 @@ class Reduce:
     """Reduce a gradient index."""
 
     index_cfg: IndexConfig
-
-    reduce_cfg: ReduceConfig
 
     preprocess_cfg: PreprocessConfig
 
@@ -74,7 +67,7 @@ class Reduce:
 
         validate_run_path(self.index_cfg)
 
-        reduce(self.index_cfg, self.reduce_cfg, self.preprocess_cfg)
+        reduce(self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass

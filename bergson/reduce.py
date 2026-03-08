@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.collector.gradient_collectors import GradientCollector
-from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
+from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.utils.utils import assert_type
 from bergson.utils.worker_utils import setup_model_and_peft
@@ -26,7 +26,6 @@ def reduce_worker(
     local_rank: int,
     world_size: int,
     index_cfg: IndexConfig,
-    reduce_cfg: ReduceConfig,
     preprocess_cfg: PreprocessConfig,
     ds: Dataset | IterableDataset,
 ):
@@ -43,8 +42,8 @@ def reduce_worker(
         Total number of workers participating in the run.
     index_cfg : IndexConfig
         Specifies the model, tokenizer, PEFT adapters, and other settings.
-    reduce_cfg : ReduceConfig
-        Specifies aggregation strategy (mean/sum, unit normalization).
+    preprocess_cfg : PreprocessConfig
+        Specifies aggregation strategy (mean/sum, unit normalization etc.).
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
@@ -78,7 +77,6 @@ def reduce_worker(
         "cfg": index_cfg,
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
-        "reduce_cfg": reduce_cfg,
         "preprocess_cfg": preprocess_cfg,
     }
 
@@ -141,6 +139,7 @@ def reduce_worker(
                 "dtype": struct_dtype,
                 "grad_sizes": grad_sizes,
                 "base_dtype": "float32",
+                "preconditioned": preprocess_cfg.preconditioner_path is not None,
             }
 
             with info_path.open("w") as f:
@@ -149,7 +148,6 @@ def reduce_worker(
 
 def reduce(
     index_cfg: IndexConfig,
-    reduce_cfg: ReduceConfig,
     preprocess_cfg: PreprocessConfig,
 ):
     """
@@ -160,8 +158,6 @@ def reduce(
     index_cfg : IndexConfig
         Specifies the run path, dataset, model, tokenizer, PEFT adapters,
         and many other gradient collection settings.
-    reduce_cfg : ReduceConfig
-        Specifies aggregation strategy (mean/sum).
     preprocess_cfg : PreprocessConfig
         Preprocessing configuration for gradient normalization/preconditioning.
     """
@@ -174,7 +170,7 @@ def reduce(
     launch_distributed_run(
         "reduce",
         reduce_worker,
-        [index_cfg, reduce_cfg, preprocess_cfg, ds],
+        [index_cfg, preprocess_cfg, ds],
         index_cfg.distributed,
     )
 

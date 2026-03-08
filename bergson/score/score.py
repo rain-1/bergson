@@ -36,45 +36,17 @@ from bergson.utils.worker_utils import (
 )
 
 
-def create_scorer(
-    path: Path,
-    data: Dataset,
-    query_grads: dict[str, torch.Tensor],
+def get_query_grads(
     score_cfg: ScoreConfig,
-    preprocess_cfg: PreprocessConfig,
-    device: torch.device,
-    dtype: torch.dtype,
-    *,
-    attribute_tokens: bool = False,
-) -> Scorer:
-    """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
-    num_queries = len(query_grads[score_cfg.modules[0]])
-    if attribute_tokens:
-        writer = MemmapTokenScoreWriter(
-            path,
-            data,
-            num_queries,
-            dtype=dtype,
-        )
-    else:
-        writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
-    return Scorer(
-        query_grads=query_grads,
-        modules=score_cfg.modules,
-        writer=writer,
-        device=device,
-        dtype=dtype,
-        unit_normalize=preprocess_cfg.unit_normalize,
-        score_mode=score_cfg.score,
-        attribute_tokens=attribute_tokens,
-        preconditioner_path=preprocess_cfg.preconditioner_path,
-    )
-
-
-def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], bool]:
     """
     Load query gradients from the mmap index and return as a dict of tensors.
-    Preconditioners may be mixed as described in https://arxiv.org/html/2410.17413v1#S3.
+
+    Returns
+    -------
+    tuple[dict[str, torch.Tensor], bool]
+        The query gradients and whether they were already preconditioned
+        (e.g. during a reduce step).
     """
     query_path = Path(score_cfg.query_path)
     if not query_path.exists():
@@ -87,6 +59,7 @@ def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:
         metadata = json.load(f)
         target_modules = metadata["dtype"]["names"]
         grad_sizes = metadata["grad_sizes"]
+        query_preconditioned = metadata.get("preconditioned", False)
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules
@@ -108,7 +81,58 @@ def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:
         else:
             grads[name] = torch.from_numpy(sliced.copy())
 
-    return grads
+    return grads, query_preconditioned
+
+
+def create_scorer(
+    path: Path,
+    data: Dataset,
+    score_cfg: ScoreConfig,
+    preprocess_cfg: PreprocessConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
+) -> Scorer:
+    """Create a Scorer with MemmapScoreWriter for disk-based scoring.
+
+    Loads query gradients from disk, preprocesses them, and constructs the
+    Scorer. Automatically detects whether the query was already preconditioned
+    (e.g. via reduce) to avoid double-preconditioning.
+    """
+    query_grads, query_preconditioned = get_query_grads(score_cfg)
+    query_grads = preprocess_grads(
+        query_grads,
+        score_cfg.modules,
+        unit_normalize=preprocess_cfg.unit_normalize,
+        device=device,
+        aggregate_grads="none",
+        normalize_aggregated_grad=False,
+    )
+
+    num_queries = len(query_grads[score_cfg.modules[0]])
+    if attribute_tokens:
+        writer = MemmapTokenScoreWriter(
+            path,
+            data,
+            num_queries,
+            dtype=dtype,
+        )
+    else:
+        writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
+
+    return Scorer(
+        query_grads=query_grads,
+        modules=score_cfg.modules,
+        writer=writer,
+        device=device,
+        dtype=dtype,
+        unit_normalize=preprocess_cfg.unit_normalize,
+        score_mode=score_cfg.score,
+        attribute_tokens=attribute_tokens,
+        preconditioner_path=preprocess_cfg.preconditioner_path,
+        query_preconditioned=query_preconditioned,
+    )
 
 
 def score_worker(
@@ -119,7 +143,6 @@ def score_worker(
     score_cfg: ScoreConfig,
     preprocess_cfg: PreprocessConfig,
     ds: Dataset | IterableDataset,
-    query_grads: dict[str, torch.Tensor],
 ):
     """
     Score worker executed per rank to produce and score gradients against a query.
@@ -141,8 +164,6 @@ def score_worker(
         Preprocessing configuration for gradient normalization/preconditioning.
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
-    query_grads : dict[str, torch.Tensor]
-        Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
     """
     torch.cuda.set_device(local_rank)
 
@@ -190,7 +211,6 @@ def score_worker(
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
             ds,
-            query_grads,
             score_cfg,
             preprocess_cfg,
             device=score_device,
@@ -217,7 +237,6 @@ def score_worker(
             kwargs["scorer"] = create_scorer(
                 index_cfg.partial_run_path / f"shard-{shard_id:05d}",
                 ds_shard,
-                query_grads,
                 score_cfg,
                 preprocess_cfg,
                 device=score_device,
@@ -243,7 +262,6 @@ def score_dataset(
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
     preprocess_cfg: PreprocessConfig,
-    preprocess_device=torch.device("cuda:0"),
 ):
     """
     Score a dataset against an existing gradient index.
@@ -267,19 +285,10 @@ def score_dataset(
 
     ds = setup_data_pipeline(index_cfg)
 
-    query_grads = get_query_grads(score_cfg)
-
-    query_grads = preprocess_grads(
-        query_grads,
-        score_cfg.modules,
-        preprocess_cfg.unit_normalize,
-        preprocess_device,
-    )
-
     launch_distributed_run(
         "score",
         score_worker,
-        [index_cfg, score_cfg, preprocess_cfg, ds, query_grads],
+        [index_cfg, score_cfg, preprocess_cfg, ds],
         index_cfg.distributed,
     )
 

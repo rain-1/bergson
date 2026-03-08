@@ -28,6 +28,7 @@ class Scorer:
         score_mode: str = "individual",
         attribute_tokens: bool = False,
         preconditioner_path: str | None = None,
+        query_preconditioned: bool = False,
     ):
         """
         Initialize the scorer.
@@ -58,6 +59,11 @@ class Scorer:
               (two-sided) preconditioning.
             * ``unit_normalize=False`` — loads H^(-1) and applies to query
               only for one-sided preconditioning.
+        query_preconditioned : bool
+            If True, the query gradients have already been preconditioned
+            (e.g. during a reduce step) and should not be preconditioned
+            again. The preconditioner is still applied to index gradients
+            in split mode.
         """
         self.device = device
         self.dtype = dtype
@@ -83,8 +89,9 @@ class Scorer:
         else:
             self.preconditioners = None
 
-        # Precondition query grads per module, then cat into a single tensor
-        if preconditioners:
+        # Precondition query grads per module, then cat into a single tensor.
+        # Skip if the query was already preconditioned (e.g. during reduce).
+        if preconditioners and not query_preconditioned:
             q_list = [
                 query_grads[m].to(device=self.device, dtype=self.dtype)
                 @ preconditioners[m]

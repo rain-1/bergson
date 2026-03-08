@@ -161,7 +161,7 @@ class IndexConfig:
     """Whether to skip building the gradient index."""
 
     stats_sample_size: int | None = 10_000
-    """Number of examples to use for estimating processor statistics."""
+    """Number of examples to use for estimating normalizer statistics."""
 
     drop_columns: bool = True
     """Only save the new dataset columns. If false, the original dataset
@@ -216,6 +216,9 @@ class IndexConfig:
     attribute_tokens: bool = False
     """Whether to compute per-token gradients instead of per-example.
     Incompatible with reduce mode."""
+
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
 
     @property
     def partial_run_path(self) -> Path:
@@ -275,6 +278,14 @@ class PreprocessConfig:
     preconditioner_path: str | None = None
     """Path to a precomputed preconditioner."""
 
+    aggregation: Literal["mean", "sum", "none"] = "none"
+    """Method for aggregating the gradients."""
+
+    normalize_aggregated_grad: bool = False
+    """Whether to unit normalize the reduced query gradient. This has
+    no effect on future relative score rankings but does affect score
+    magnitudes."""
+
 
 @dataclass
 class ScoreConfig:
@@ -298,23 +309,6 @@ class ScoreConfig:
 
     modules: list[str] = field(default_factory=list)
     """Modules to use for the query. If empty, all modules will be used."""
-
-
-@dataclass
-class ReduceConfig:
-    """Config for reducing the gradients of a dataset into a standalone
-    aggregated gradient."""
-
-    method: Literal["mean", "sum"] = "mean"
-    """Method for reducing the gradients."""
-
-    modules: list[str] = field(default_factory=list)
-    """Modules to use for the query. If empty, all modules will be used."""
-
-    normalize_reduced_grad: bool = False
-    """Whether to unit normalize the reduced query gradient. This has
-    no effect on future relative score rankings but does affect score
-    magnitudes."""
 
 
 @dataclass

@@ -10,7 +10,7 @@ from torch import Tensor
 
 from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, ReduceConfig
+from bergson.config import IndexConfig
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -44,9 +44,6 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
 
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""
-
-    reduce_cfg: ReduceConfig | None = None
-    """Configuration for in-run gradient reduction."""
 
     builder: Builder | None = None
     """Handles writing gradients to disk. Created in setup() if save_index is True."""
@@ -94,7 +91,6 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
                 self.save_dtype,
                 attribute_tokens=self.cfg.attribute_tokens,
                 path=self.cfg.partial_run_path,
-                reduce_cfg=self.reduce_cfg,
             )
         else:
             self.builder = None

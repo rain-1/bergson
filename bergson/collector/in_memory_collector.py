@@ -12,7 +12,7 @@ from torch import Tensor, nn
 
 from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
+from bergson.config import IndexConfig, PreprocessConfig
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -49,9 +49,6 @@ class InMemoryCollector(HookCollectorBase):
     mod_grads: dict = dc_field(default_factory=dict)
     """Temporary per-batch gradients keyed by module name."""
 
-    reduce_cfg: ReduceConfig | None = None
-    """Configuration for in-run gradient reduction."""
-
     preprocess_cfg: PreprocessConfig | None = None
     """Configuration for gradient preprocessing."""
 
@@ -85,9 +82,9 @@ class InMemoryCollector(HookCollectorBase):
             )
 
         if self.cfg.attribute_tokens:
-            assert self.reduce_cfg is None, (
-                "attribute_tokens is incompatible" " with reduce mode."
-            )
+            assert (
+                not self.preprocess_cfg or self.preprocess_cfg.aggregation == "none"
+            ), ("attribute_tokens is incompatible" " with reduce mode.")
 
         self.save_dtype = get_gradient_dtype(self.model)
         self.lo = torch.finfo(self.save_dtype).min
@@ -111,7 +108,6 @@ class InMemoryCollector(HookCollectorBase):
                 grad_sizes,
                 self.save_dtype,
                 attribute_tokens=self.cfg.attribute_tokens,
-                reduce_cfg=self.reduce_cfg,
                 preprocess_cfg=self.preprocess_cfg,
             )
 
@@ -247,7 +243,10 @@ class InMemoryCollector(HookCollectorBase):
                 self.processor.preconditioners[name] = P.mT @ P
 
         # GPU for scorer/reduce, CPU for builder
-        if self.scorer is not None or self.reduce_cfg is not None:
+        if self.scorer is not None or (
+            self.preprocess_cfg is not None
+            and self.preprocess_cfg.aggregation != "none"
+        ):
             self.mod_grads[name] = P.to(dtype=self.save_dtype)
         else:
             self.mod_grads[name] = P.to(
