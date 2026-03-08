@@ -126,7 +126,7 @@ class IndexConfig:
     fsdp: bool = False
     """Whether to use Fully Sharded Data Parallel (FSDP) for collecting gradients."""
 
-    precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "auto"
+    precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "fp32"
     """Precision (dtype) to use for the model parameters."""
 
     projection_dim: int = 16
@@ -292,7 +292,7 @@ class ScoreConfig:
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
 
-    precision: Literal["auto", "bf16", "fp16", "fp32"] = "auto"
+    precision: Literal["auto", "bf16", "fp16", "fp32"] = "fp32"
     """Precision (dtype) to convert the query and index gradients to before
     computing the scores. If "auto", the model's gradient dtype is used."""
 
