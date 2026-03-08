@@ -14,7 +14,6 @@ from .config import (
 )
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
-from .reduce import reduce
 from .score.score import score_dataset
 from .trackstar import trackstar
 from .utils.worker_utils import validate_run_path
@@ -26,6 +25,8 @@ class Build:
 
     index_cfg: IndexConfig
 
+    preprocess_cfg: PreprocessConfig
+
     def execute(self):
         """Build the gradient index."""
         if self.index_cfg.skip_index and self.index_cfg.skip_preconditioners:
@@ -33,7 +34,7 @@ class Build:
 
         validate_run_path(self.index_cfg)
 
-        build(self.index_cfg)
+        build(self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -47,7 +48,7 @@ class Preconditioners:
         self.index_cfg.skip_index = True
         self.index_cfg.skip_preconditioners = False
         validate_run_path(self.index_cfg)
-        build(self.index_cfg)
+        build(self.index_cfg, PreprocessConfig())
 
 
 @dataclass
@@ -66,8 +67,7 @@ class Reduce:
             )
 
         validate_run_path(self.index_cfg)
-
-        reduce(self.index_cfg, self.preprocess_cfg)
+        build(self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -90,7 +90,6 @@ class Score:
             )
 
         validate_run_path(self.index_cfg)
-
         score_dataset(self.index_cfg, self.score_cfg, self.preprocess_cfg)
 
 

@@ -64,7 +64,7 @@ The normalizer is applied during gradient collection, so the same ``--normalizer
        --dataset query_data \
        --projection_dim 0 \
        --normalizer adafactor \
-       --method mean \
+       --aggregation mean \
        --skip_preconditioners
 
    # Score: collect training gradients with the same normalizer, unit normalize for cosine similarity
@@ -95,7 +95,7 @@ Unlike cosine similarity, inner product preserves gradient magnitude, so trainin
        --dataset query_data \
        --projection_dim 0 \
        --normalizer adafactor \
-       --method mean \
+       --aggregation mean \
        --skip_preconditioners
 
    # Score: inner product (no --unit_normalize)
@@ -124,7 +124,7 @@ Random projections approximately preserve inner products and cosine similarities
        --model EleutherAI/pythia-160m \
        --dataset query_data \
        --projection_dim 4096 \
-       --method mean \
+       --aggregation mean \
        --skip_preconditioners
 
    # Score training data against the reduced query

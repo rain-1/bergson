@@ -89,7 +89,6 @@ def test_score(tmp_path: Path, model, dataset):
     processor = GradientProcessor(projection_dim=16)
 
     # Step 1: Reduce query gradients using InMemoryCollector
-    preprocess_cfg = PreprocessConfig(aggregation="mean")
     reduce_index_cfg = IndexConfig(
         run_path=str(tmp_path / "reduce"), token_batch_size=1024
     )
@@ -100,7 +99,7 @@ def test_score(tmp_path: Path, model, dataset):
         data=dataset,
         cfg=reduce_index_cfg,
         processor=processor,
-        preprocess_cfg=preprocess_cfg,
+        preprocess_cfg=PreprocessConfig(aggregation="mean"),
     )
 
     computer = CollectorComputer(
