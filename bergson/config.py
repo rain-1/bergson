@@ -389,3 +389,6 @@ class TrackstarConfig:
     num_stats_sample_preconditioner: bool = True
     """Whether to use num_stats_sample items or the full dataset to
     compute preconditioners."""
+
+    resume: bool = False
+    """Skip pipeline steps whose output directory already exists."""
