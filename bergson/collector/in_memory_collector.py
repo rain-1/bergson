@@ -10,7 +10,7 @@ from datasets import Dataset
 from jaxtyping import Float
 from torch import Tensor, nn
 
-from bergson.builders import Builder, create_builder
+from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
 from bergson.gradients import (
@@ -30,9 +30,8 @@ class InMemoryCollector(HookCollectorBase):
     """Collector that accumulates gradients in memory.
 
     Supports both per-example and per-token gradient collection
-    via ``cfg.attribute_tokens``.  Uses in-memory builders
-    (:class:`InMemorySequenceBuilder` /
-    :class:`InMemoryTokenBuilder`) for flat gradient storage and
+    via ``cfg.attribute_tokens``.  Uses in-memory builder
+    (:class:`Builder`) for flat gradient storage and
     an optional :class:`Scorer` for on-the-fly scoring.
 
     After collection, ``self.gradients`` is populated from the
@@ -71,7 +70,7 @@ class InMemoryCollector(HookCollectorBase):
         super().__post_init__()
 
     def setup(self) -> None:
-        """Initialize collector state and create builders."""
+        """Initialize collector state and create builder."""
         assert isinstance(
             self.model.device, torch.device
         ), "Model device is not set correctly"
@@ -103,7 +102,7 @@ class InMemoryCollector(HookCollectorBase):
         # Create in-memory builder when not scoring
         if self.builder is None and self.scorer is None:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = create_builder(
+            self.builder = Builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,

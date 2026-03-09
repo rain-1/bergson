@@ -1,9 +1,6 @@
 __version__ = "0.8.0"
 
-from .builders import (
-    Builder,
-    create_builder,
-)
+from .builder import Builder
 from .collection import collect_gradients
 from .collector.collector import CollectorComputer
 from .collector.gradient_collectors import GradientCollector
@@ -37,7 +34,6 @@ __all__ = [
     "load_token_gradients",
     "TokenGradients",
     "Builder",
-    "create_builder",
     "fit_normalizers",
     "Attributor",
     "FaissConfig",
