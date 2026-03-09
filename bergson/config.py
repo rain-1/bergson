@@ -38,6 +38,12 @@ class DataConfig:
     truncation: bool = False
     """Whether to truncate long documents to fit the token budget."""
 
+    format_template: str = ""
+    """Path to a YAML containing a Jinja2 template specifying how to
+    format dataset rows into text. The YAML must contain `doc_to_text`
+    and optionally `doc_to_target` and `doc_to_choice`. MCQA YAML
+    available at `bergson/templates/mcqa.yaml`."""
+
     data_args: str = ""
     """Arguments to pass to the dataset constructor in the format
     arg1=val1,arg2=val2."""

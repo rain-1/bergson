@@ -12,6 +12,7 @@ license = {text = "MIT License"}
 dependencies = [
     "accelerate", # For device_map in from_pretrained
     "datasets",
+    "jinja2",
     "jaxtyping>=0.3.3",
     "ml_dtypes",
     "natsort",
