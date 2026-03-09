@@ -198,9 +198,13 @@ def precondition_grad(
     if not h_inv:
         return grad
 
+    final_device = next(iter(grad.values())).device
+
     return {
-        name: grad[name].to(device=h_inv[name].device, dtype=h_inv[name].dtype)
-        @ h_inv[name]
+        name: (
+            grad[name].to(device=h_inv[name].device, dtype=h_inv[name].dtype)
+            @ h_inv[name]
+        ).to(final_device)
         for name in grad.keys()
     }
 
