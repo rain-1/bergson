@@ -31,8 +31,7 @@ class InMemoryCollector(HookCollectorBase):
 
     Supports both per-example and per-token gradient collection
     via ``cfg.attribute_tokens``.  Uses in-memory builders
-    (:class:`InMemorySequenceBuilder` /
-    :class:`InMemoryTokenBuilder`) for flat gradient storage and
+    (:class:`Builder`) for flat gradient storage and
     an optional :class:`Scorer` for on-the-fly scoring.
 
     After collection, ``self.gradients`` is populated from the

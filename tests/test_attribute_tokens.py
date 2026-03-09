@@ -1,6 +1,7 @@
 import json
 import math
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -16,9 +17,9 @@ from bergson import (
     fit_normalizers,
     load_token_gradients,
 )
-from bergson.builders import TokenBuilder
+from bergson.builders import Builder
 from bergson.collector.gradient_collectors import GradientCollector
-from bergson.config import IndexConfig
+from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import compute_num_token_grads, create_token_index
 from bergson.score.score_writer import MemmapTokenScoreWriter
 from bergson.score.scorer import Scorer
@@ -124,13 +125,13 @@ def test_token_gradients_wrapper(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# TokenBuilder
+# Token Builder
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_token_builder_write(tmp_path: Path):
-    """TokenBuilder correctly writes non-contiguous batches."""
+    """Token builder correctly writes non-contiguous batches."""
     ds = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8, 9]],
@@ -140,8 +141,19 @@ def test_token_builder_write(tmp_path: Path):
 
     # [2, 3, 1]
     grad_sizes = {"m": 2}
+    cfg = PreprocessConfig(aggregation="none")
 
-    builder = TokenBuilder(ds, grad_sizes, torch.float32, path=tmp_path)
+    with patch("bergson.builders.dist") as mock_dist:
+        mock_dist.is_initialized.return_value = False
+        mock_dist.get_rank.return_value = 0
+        builder = Builder(
+            ds,
+            grad_sizes,
+            torch.float32,
+            cfg,
+            attribute_tokens=True,
+            path=tmp_path,
+        )
 
     # Write examples 0 and 2 (non-contiguous!)
     mod_grads = {
