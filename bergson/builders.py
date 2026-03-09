@@ -170,25 +170,25 @@ class InMemorySequenceBuilder(Builder):
         self.preprocess_cfg = preprocess_cfg
         total_grad_dim = sum(grad_sizes.values())
 
+        device = torch.device("cuda", torch.cuda.current_device())
+        self.h_inv = get_trackstar_preconditioner(
+            self.preprocess_cfg.preconditioner_path,
+            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
+            device=device,
+        )
+
         if self.preprocess_cfg.aggregation != "none":
             np_dtype = np.float32
             num_grads = 1
-            device = "cuda" if torch.cuda.is_available() else "cpu"
             self.in_memory_grad_buffer = torch.zeros(
                 (1, total_grad_dim),
                 dtype=torch.float32,
                 device=device,
             )
-            self.h_inv = get_trackstar_preconditioner(
-                self.preprocess_cfg.preconditioner_path,
-                power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
-                device=torch.device(device),
-            )
         else:
             np_dtype = convert_dtype_to_np(dtype)
             num_grads = self.num_items
             self.in_memory_grad_buffer = None
-            self.h_inv: dict[str, torch.Tensor] = {}
 
         self.grad_buffer = np.zeros(
             (num_grads, total_grad_dim),
@@ -213,13 +213,16 @@ class InMemorySequenceBuilder(Builder):
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+
+        mod_grads = precondition_grad(mod_grads, self.h_inv)
+
         offset = 0
         for module_name in self.grad_sizes.keys():
             dim = mod_grads[module_name].shape[1]
             self.grad_buffer[
                 indices,
                 offset : offset + dim,
-            ] = tensor_to_numpy(mod_grads[module_name])
+            ] = tensor_to_numpy(mod_grads[module_name].cpu())
             offset += dim
 
     def teardown(self):
@@ -227,9 +230,6 @@ class InMemorySequenceBuilder(Builder):
             return
 
         assert self.in_memory_grad_buffer is not None
-
-        if torch.cuda.is_available():
-            self.in_memory_grad_buffer = self.in_memory_grad_buffer.cuda()
 
         if dist.is_initialized():
             dist.reduce(
@@ -242,16 +242,18 @@ class InMemorySequenceBuilder(Builder):
             self.in_memory_grad_buffer /= self.num_items
 
         if self.preprocess_cfg.normalize_aggregated_grad:
-            device = self.in_memory_grad_buffer.device
             self.in_memory_grad_buffer = normalize_flat_grad(
-                self.in_memory_grad_buffer, device
+                self.in_memory_grad_buffer,
+                self.in_memory_grad_buffer.device,
             )
 
         self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
 
-        self.grad_buffer[:] = tensor_to_numpy(self.in_memory_grad_buffer).astype(
-            self.grad_buffer.dtype
-        )
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        if rank == 0:
+            self.grad_buffer[:] = tensor_to_numpy(self.in_memory_grad_buffer).astype(
+                self.grad_buffer.dtype
+            )
 
 
 class InMemoryTokenBuilder(Builder):
@@ -338,27 +340,26 @@ class SequenceBuilder(Builder):
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         self.preprocess_cfg = preprocess_cfg
-        self.rank = dist.get_rank() if dist.is_initialized() else 0
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        self.h_inv = get_trackstar_preconditioner(
+            self.preprocess_cfg.preconditioner_path,
+            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
+            device=device,
+        )
+
         if self.preprocess_cfg.aggregation != "none":
             num_grads = 1
-            device = torch.device(f"cuda:{self.rank}")
             np_dtype = np.float32
             self.in_memory_grad_buffer = torch.zeros(
                 (num_grads, sum(grad_sizes.values())),
                 dtype=torch.float32,
                 device=device,
             )
-
-            self.h_inv = get_trackstar_preconditioner(
-                self.preprocess_cfg.preconditioner_path,
-                power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
-                device=torch.device(device),
-            )
         else:
             num_grads = self.num_items
             np_dtype = convert_dtype_to_np(dtype)
             self.in_memory_grad_buffer = None
-            self.h_inv: dict[str, torch.Tensor] = {}
 
         self.grad_buffer = create_index(
             path,
@@ -381,14 +382,12 @@ class SequenceBuilder(Builder):
                 self.preprocess_cfg.unit_normalize,
             )
         else:
-            # It turns out that it's very important for efficiency to write the
-            # gradients sequentially instead of first concatenating them, then
-            # writing to one vector
+            mod_grads = precondition_grad(mod_grads, self.h_inv)
             offset = 0
             for module_name in self.grad_sizes.keys():
                 self.grad_buffer[
                     indices, offset : offset + mod_grads[module_name].shape[1]
-                ] = tensor_to_numpy(mod_grads[module_name])
+                ] = tensor_to_numpy(mod_grads[module_name].cpu())
                 offset += mod_grads[module_name].shape[1]
 
     def teardown(self):
@@ -399,19 +398,16 @@ class SequenceBuilder(Builder):
 
         assert self.in_memory_grad_buffer is not None
 
-        self.in_memory_grad_buffer = self.in_memory_grad_buffer.cuda()
-
         if dist.is_initialized():
             dist.reduce(self.in_memory_grad_buffer, dst=0, op=dist.ReduceOp.SUM)
 
         if self.preprocess_cfg.aggregation == "mean":
             self.in_memory_grad_buffer /= self.num_items
 
-        # Unit normalize the reduced gradient
         if self.preprocess_cfg.normalize_aggregated_grad:
-            device = self.in_memory_grad_buffer.device
             self.in_memory_grad_buffer = normalize_flat_grad(
-                self.in_memory_grad_buffer, device
+                self.in_memory_grad_buffer,
+                self.in_memory_grad_buffer.device,
             )
 
         self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
@@ -421,8 +417,6 @@ class SequenceBuilder(Builder):
             self.grad_buffer[:] = tensor_to_numpy(self.in_memory_grad_buffer).astype(
                 self.grad_buffer.dtype
             )
-
-        self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
 
 
 def create_builder(
