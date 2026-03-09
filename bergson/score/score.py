@@ -65,13 +65,11 @@ def get_query_grads(
 
     preprocess_path = Path(query_path / "preprocess_config.json")
     if preprocess_path.exists():
-        with open(query_path / "preprocess_config.json", "r") as f:
-            preprocess_cfg = PreprocessConfig(**metadata)
-            # query_preconditioned = bool(metadata.get("preconditioner_path", False))
+        with open(preprocess_path, "r") as f:
+            preprocess_data = json.load(f)
+            preprocess_cfg = PreprocessConfig(**preprocess_data)
     else:
         preprocess_cfg = PreprocessConfig()
-
-        # query_preconditioned = False
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules

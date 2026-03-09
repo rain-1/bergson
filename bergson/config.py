@@ -379,3 +379,7 @@ class TrackstarConfig:
     computed so that the sorted singular-value curves of the query and
     index preconditioners intersect at this component. Typical value is
     ~1000 out of ~65K total components."""
+
+    num_stats_sample_preconditioner: bool = True
+    """Whether to use num_stats_sample items or the full dataset to
+    compute preconditioners."""

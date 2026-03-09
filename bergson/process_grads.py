@@ -147,9 +147,10 @@ def get_trackstar_preconditioner(
     if preconditioner_path is None:
         return {}
 
+    # Load preconditioners on device one-by-one for memory efficiency
     preconditioners = GradientProcessor.load(
         Path(preconditioner_path),
-        map_location=device,
+        map_location="cpu",
     ).preconditioners
 
     final_dtype = return_dtype or next(iter(preconditioners.values())).dtype
