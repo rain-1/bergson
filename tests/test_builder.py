@@ -370,6 +370,31 @@ def test_inmemory_token_noncontiguous_indices(small_dataset, grad_sizes):
 
 
 @requires_cuda
+def test_unit_normalize_no_aggregation(small_dataset, grad_sizes):
+    """unit_normalize=True with aggregation='none' should produce unit-norm rows."""
+    cfg = PreprocessConfig(aggregation="none", unit_normalize=True)
+    builder = _make_builder(small_dataset, grad_sizes, torch.float32, cfg)
+    _inject_identity_preconditioner(builder, grad_sizes)
+
+    # Use non-uniform grads so norms aren't already 1
+    mod_grads = {
+        "module_a": torch.tensor([[3.0, 0.0, 0.0, 4.0]], device="cuda:0"),
+        "module_b": torch.tensor([[0.0, 0.0, 0.0, 0.0]], device="cuda:0"),
+    }
+    builder([0], mod_grads)
+
+    row = builder.grad_buffer[0]
+    norm = np.linalg.norm(row)
+    assert norm > 0, "Row is all zeros — normalization not applied"
+    np.testing.assert_allclose(
+        norm,
+        1.0,
+        atol=1e-5,
+        err_msg="Gradients should be unit normalized when unit_normalize=True",
+    )
+
+
+@requires_cuda
 def test_disk_token_writes_and_flushes(small_dataset, grad_sizes, tmp_path):
     """Disk token builder writes per-token grads to memmap."""
     cfg = PreprocessConfig(aggregation="none")

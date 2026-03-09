@@ -17,22 +17,21 @@ from .utils.utils import convert_dtype_to_np, tensor_to_numpy
 _EPS_SQ = torch.finfo(torch.float32).eps ** 2
 
 
-def _reduce(
+def _preprocess(
     mod_grads: dict[str, torch.Tensor],
-    buffer: torch.Tensor,
     grad_sizes,
     h_inv,
     do_normalize: bool,
-) -> None:
-    """Preprocess + aggregate grads."""
+) -> torch.Tensor:
+    """Precondition, concatenate, and optionally unit-normalize gradients."""
     mod_grads = precondition_grad(mod_grads, h_inv)
-
     grads = torch.cat([mod_grads[m] for m in grad_sizes.keys()], dim=-1)
 
     if do_normalize:
         inv_norms = grads.pow(2).sum(dim=-1).clamp_min_(_EPS_SQ).rsqrt().unsqueeze(1)
         grads = grads * inv_norms
-    buffer[0] += grads.sum(dim=0).to(dtype=torch.float32, device=buffer.device)
+
+    return grads
 
 
 class Builder:
@@ -119,7 +118,7 @@ class Builder:
                     (total_tokens, total_grad_dim),
                     dtype=np_dtype,
                 )
-            self._scatter = self._scatter_tokens
+            self._scatter_flat = self._scatter_flat_tokens
         else:
             self.num_token_grads = None
             self.offsets = None
@@ -136,7 +135,7 @@ class Builder:
                     (num_grads, total_grad_dim),
                     dtype=np_dtype,
                 )
-            self._scatter = self._scatter_sequences
+            self._scatter_flat = self._scatter_flat_sequences
 
     # ── __call__ ─────────────────────────────────────────────────────────
 
@@ -145,58 +144,49 @@ class Builder:
         indices: list[int],
         mod_grads: dict[str, torch.Tensor],
     ) -> None:
+        grads = _preprocess(
+            mod_grads,
+            self.grad_sizes,
+            self.h_inv,
+            self.preprocess_cfg.unit_normalize,
+        )
+
         if self.preprocess_cfg.aggregation != "none":
             assert self.in_memory_grad_buffer is not None
-            _reduce(
-                mod_grads,
-                self.in_memory_grad_buffer,
-                self.grad_sizes,
-                self.h_inv,
-                self.preprocess_cfg.unit_normalize,
+            self.in_memory_grad_buffer[0] += grads.sum(dim=0).to(
+                dtype=torch.float32, device=self.in_memory_grad_buffer.device
             )
             return
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-        mod_grads = precondition_grad(mod_grads, self.h_inv)
-        self._scatter(indices, mod_grads)
+        self._scatter_flat(indices, grads)
 
     # ── Scatter strategies ───────────────────────────────────────────────
 
-    def _scatter_sequences(
+    def _scatter_flat_sequences(
         self,
         indices: list[int],
-        mod_grads: dict[str, torch.Tensor],
+        grads: torch.Tensor,
     ) -> None:
-        offset = 0
-        for module_name in self.grad_sizes.keys():
-            self.grad_buffer[
-                indices, offset : offset + mod_grads[module_name].shape[1]
-            ] = tensor_to_numpy(mod_grads[module_name].cpu())
-            offset += mod_grads[module_name].shape[1]
+        self.grad_buffer[indices] = tensor_to_numpy(grads.cpu())
 
-    def _scatter_tokens(
+    def _scatter_flat_tokens(
         self,
         indices: list[int],
-        mod_grads: dict[str, torch.Tensor],
+        grads: torch.Tensor,
     ) -> None:
         assert self.num_token_grads is not None and self.offsets is not None
         per_example_lengths = self.num_token_grads[indices]
+        g_np = tensor_to_numpy(grads.cpu())
 
-        col_offset = 0
-        for module_name in self.grad_sizes.keys():
-            g_np = tensor_to_numpy(mod_grads[module_name].cpu())
-            dim = g_np.shape[1]
-            row = 0
-            for idx, sl in zip(indices, per_example_lengths):
-                buf_start = int(self.offsets[idx])
-                buf_end = int(self.offsets[idx + 1])
-                self.grad_buffer[buf_start:buf_end, col_offset : col_offset + dim] = (
-                    g_np[row : row + sl]
-                )
-                row += sl
-            col_offset += dim
+        row = 0
+        for idx, sl in zip(indices, per_example_lengths):
+            buf_start = int(self.offsets[idx])
+            buf_end = int(self.offsets[idx + 1])
+            self.grad_buffer[buf_start:buf_end] = g_np[row : row + sl]
+            row += sl
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
