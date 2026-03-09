@@ -7,7 +7,7 @@ import pytest
 import torch
 from datasets import Dataset
 
-from bergson.builders import Builder, create_builder
+from bergson.builder import Builder
 from bergson.config import PreprocessConfig
 
 requires_cuda = pytest.mark.skipif(
@@ -48,7 +48,7 @@ def _no_dist():
     mock = MagicMock()
     mock.is_initialized.return_value = False
     mock.get_rank.return_value = 0
-    return patch("bergson.builders.dist", mock)
+    return patch("bergson.builder.dist", mock)
 
 
 def _fake_dist(rank):
@@ -57,7 +57,7 @@ def _fake_dist(rank):
     mock.is_initialized.return_value = True
     mock.get_rank.return_value = rank
     mock.ReduceOp.SUM = MagicMock()
-    return patch("bergson.builders.dist", mock)
+    return patch("bergson.builder.dist", mock)
 
 
 def _inject_identity_preconditioner(builder, grad_sizes, device="cuda:0"):
@@ -389,20 +389,3 @@ def test_disk_token_writes_and_flushes(small_dataset, grad_sizes, tmp_path):
     np.testing.assert_allclose(builder.grad_buffer[0:4], 3.0, atol=1e-6)
     np.testing.assert_allclose(builder.grad_buffer[4:8], 3.0, atol=1e-6)
     assert isinstance(builder.grad_buffer, np.memmap)
-
-
-# ── create_builder ───────────────────────────────────────────────────────
-
-
-@requires_cuda
-def test_create_builder_returns_builder(small_dataset, grad_sizes, tmp_path):
-    """create_builder always returns a Builder."""
-    cfg = PreprocessConfig(aggregation="none")
-    for kwargs in [
-        {},
-        {"attribute_tokens": True},
-        {"path": tmp_path},
-    ]:
-        with _no_dist():
-            b = create_builder(small_dataset, grad_sizes, torch.float32, cfg, **kwargs)
-        assert isinstance(b, Builder)

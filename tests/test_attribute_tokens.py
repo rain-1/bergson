@@ -17,7 +17,7 @@ from bergson import (
     fit_normalizers,
     load_token_gradients,
 )
-from bergson.builders import Builder
+from bergson.builder import Builder
 from bergson.collector.gradient_collectors import GradientCollector
 from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import compute_num_token_grads, create_token_index
@@ -143,7 +143,7 @@ def test_token_builder_write(tmp_path: Path):
     grad_sizes = {"m": 2}
     cfg = PreprocessConfig(aggregation="none")
 
-    with patch("bergson.builders.dist") as mock_dist:
+    with patch("bergson.builder.dist") as mock_dist:
         mock_dist.is_initialized.return_value = False
         mock_dist.get_rank.return_value = 0
         builder = Builder(

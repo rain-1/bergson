@@ -9,7 +9,7 @@ from datasets import Dataset, Value
 from jaxtyping import Float
 from torch import Tensor
 
-from bergson.builders import Builder, create_builder
+from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
 from bergson.gradients import (
@@ -88,7 +88,7 @@ class GradientCollector(HookCollectorBase):
 
         if self.save_index:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = create_builder(
+            self.builder = Builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,

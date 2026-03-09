@@ -241,23 +241,3 @@ class Builder:
             self.grad_buffer[:] = tensor_to_numpy(self.in_memory_grad_buffer).astype(
                 self.grad_buffer.dtype
             )
-
-
-def create_builder(
-    data: Dataset,
-    grad_sizes: dict[str, int],
-    dtype: torch.dtype,
-    preprocess_cfg: PreprocessConfig,
-    *,
-    attribute_tokens: bool = False,
-    path: Path | None = None,
-) -> Builder:
-    """Create a :class:`Builder`."""
-    return Builder(
-        data,
-        grad_sizes,
-        dtype,
-        preprocess_cfg,
-        attribute_tokens=attribute_tokens,
-        path=path,
-    )
