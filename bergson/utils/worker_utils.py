@@ -22,6 +22,7 @@ from transformers import (
 
 from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches, load_data_string, tokenize
+from bergson.format import apply_format
 from bergson.gradients import GradientProcessor, Normalizer
 from bergson.normalizer.fit_normalizers import fit_normalizers
 from bergson.utils.utils import assert_type, get_layer_list
@@ -337,11 +338,25 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
 
     remove_columns = ds.column_names if cfg.drop_columns else None
 
+    tokenize_cfg = cfg.data
+    if cfg.data.format_template:
+        assert isinstance(
+            ds, Dataset
+        ), "format_template requires a non-streaming dataset"
+        ds = apply_format(ds, cfg.data.format_template)
+        tokenize_cfg = DataConfig(
+            prompt_column="prompt" if "completion" in ds.column_names else "text",
+            completion_column="completion" if "completion" in ds.column_names else "",
+            truncation=cfg.data.truncation,
+        )
+
     if not ds.column_names or "input_ids" not in ds.column_names:
         ds = ds.map(
             tokenize,
             batched=True,
-            fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer, max_length=max_length),
+            fn_kwargs=dict(
+                args=tokenize_cfg, tokenizer=tokenizer, max_length=max_length
+            ),
         )
 
     if not cfg.data.truncation and isinstance(ds, Dataset):
