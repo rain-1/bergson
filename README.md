@@ -190,8 +190,8 @@ If you found Bergson useful in your research, please cite us:
   title        = {Bergson: Mapping out the "memory" of neural nets with data attribution},
   year         = {2026},
   publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.XXXXXXX},
-  url          = {https://doi.org/10.5281/zenodo.XXXXXXX}
+  doi          = {10.5281/zenodo.18906967}
+  url          = {https://doi.org/10.5281/zenodo.18906967}
 }
 ```
 
