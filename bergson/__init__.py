@@ -14,7 +14,6 @@ from .config import (
     IndexConfig,
     PreprocessConfig,
     QueryConfig,
-    ReduceConfig,
     ScoreConfig,
 )
 from .data import (
@@ -53,7 +52,6 @@ __all__ = [
     "PreprocessConfig",
     "Scorer",
     "ScoreConfig",
-    "ReduceConfig",
     "QueryConfig",
     "mix_preconditioners",
 ]
