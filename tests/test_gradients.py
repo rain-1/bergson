@@ -235,7 +235,7 @@ def test_gradient_collector_proj_norm():
                     g = layer.weight.grad
                     assert g is not None
 
-                    g = normalizers[name].normalize_(g)
+                    g = normalizers[name].normalize_weight(g)
                     if p is not None:
                         A = collector.projection(name, p, o, "left", g.device, g.dtype)
                         B = collector.projection(name, p, i, "right", g.device, g.dtype)
@@ -327,7 +327,7 @@ def test_gradient_collector_batched(
                 layer = model.get_submodule(layer_name)
                 grad = layer.weight.grad.clone()
 
-                grad = normalizers[layer_name].normalize_(grad)
+                grad = normalizers[layer_name].normalize_weight(grad)
 
                 if include_bias:
                     bias_grad = layer.bias.grad.clone()

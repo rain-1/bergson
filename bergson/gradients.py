@@ -41,14 +41,25 @@ class Normalizer(ABC):
         return cls(**state_dict)
 
     @abstractmethod
-    def normalize_(
+    def normalize_weight(
         self,
-        weight_grad: Tensor,
-        bias_grad: Tensor | None = None,
+        grad: Tensor,
         eps: float = 1e-8,
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> Tensor:
         """
-        Normalize gradients in-place, adding a small epsilon to avoid division by zero.
+        Normalize weight gradients in-place.
+        Adds a small epsilon to avoid division by zero.
+        """
+
+    @abstractmethod
+    def normalize_bias(
+        self,
+        grad: Tensor,
+        eps: float = 1e-8,
+    ) -> Tensor:
+        """
+        Normalize bias gradients in-place.
+        Adds a small epsilon to avoid division by zero.
         """
 
     def state_dict(self) -> dict[str, str | Tensor]:
@@ -232,6 +243,7 @@ class LayerAdapter:
 class AdafactorNormalizer(Normalizer):
     """
     Row and column sums of second moments of gradients for a matrix-valued parameter.
+    Weight normalization mutates gradient values in-place.
 
     Args:
         row: Row statistics [O]
@@ -252,12 +264,11 @@ class AdafactorNormalizer(Normalizer):
             ), f"Expected 1D tensor for bias_avg_sq, got {self.bias_avg_sq.ndim}D"
 
     @torch.compile
-    def normalize_(
+    def normalize_weight(
         self,
-        weight_grad: Tensor,
-        bias_grad: Tensor | None = None,
+        grad: Tensor,
         eps: float = 1e-30,
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> Tensor:
         """
         Normalize the row and column sums by adding a small epsilon.
 
@@ -287,19 +298,23 @@ class AdafactorNormalizer(Normalizer):
         b = c.rsqrt_()
 
         # Implicitly do the Hadamard product
-        weight_grad *= a[:, None]  # [N, O] * [O] → [N, O]
-        weight_grad *= b[None, :]
+        grad *= a[:, None]  # [N, O] * [O] → [N, O]
+        grad *= b[None, :]
 
-        if bias_grad is None:
-            return weight_grad, None
+        return grad
 
+    @torch.compile
+    def normalize_bias(
+        self,
+        grad: Tensor,
+        eps: float = 1e-8,
+    ) -> Tensor:
+        """Normalize the gradients by the square root of the second moments."""
         assert self.bias_avg_sq is not None
-        bias_denom = self.bias_avg_sq.sqrt()
 
-        return (
-            weight_grad,
-            bias_grad.div_(bias_denom.add_(eps)),
-        )
+        # Adafactor-style epsilon is added inside the square root.
+        # Differs slightly from the PyTorch implementation which uses clamp.
+        return grad * self.bias_avg_sq.add(eps).rsqrt_()
 
     def to_adam(self) -> "AdamNormalizer":
         """
@@ -319,7 +334,7 @@ class AdafactorNormalizer(Normalizer):
 @dataclass
 class AdamNormalizer(Normalizer):
     """
-    Contains the second moments of the gradients.
+    Contains the second moments of the gradients. Mutates gradient values in-place.
 
     Args:
         weight_avg_sq: Second moments for weights [O, I]
@@ -330,25 +345,28 @@ class AdamNormalizer(Normalizer):
     bias_avg_sq: Tensor | None = None
 
     @torch.compile
-    def normalize_(
+    def normalize_weight(
         self,
-        weight_grad: Tensor,
-        bias_grad: Tensor | None = None,
+        grad: Tensor,
         eps: float = 1e-8,
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> Tensor:
         """Normalize the gradients by the square root of the second moments."""
         # Adam-style epsilon is added outside the square root
-        weight_denom = self.weight_avg_sq.sqrt()
+        denom = self.weight_avg_sq.sqrt()
+        return grad.div_(denom.add_(eps))
 
-        if bias_grad is None:
-            return weight_grad.div_(weight_denom.add_(eps)), None
+    @torch.compile
+    def normalize_bias(
+        self,
+        grad: Tensor,
+        eps: float = 1e-8,
+    ) -> Tensor:
+        """Normalize the gradients by the square root of the second moments."""
+        assert self.bias_avg_sq is not None
+        denom = self.bias_avg_sq.sqrt()
 
-        bias_denom = self.bias_avg_sq.sqrt()
-
-        return (
-            weight_grad.div_(weight_denom.add_(eps)),
-            bias_grad.div_(bias_denom.add_(eps)),
-        )
+        # Adam-style epsilon is added outside the square root
+        return grad.div_(denom.add_(eps))
 
     def to_adafactor(self) -> AdafactorNormalizer:
         """

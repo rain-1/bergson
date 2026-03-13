@@ -522,8 +522,9 @@ def test_token_sum_equals_sequence(
     """Sum of per-token grads must equal the per-example sequence grad.
 
     With loss_reduction='sum' the sequence path computes g.mT @ a which
-    is exactly sum_s g_s (x) a_s. Since normalize_() is element-wise, it
-    commutes with the sum, so both paths must agree for all normalizers.
+    is exactly sum_s g_s (x) a_s. Since normalize_weight() and
+    normalize_bias() are element-wise, they commute with the sum, so
+    both paths must agree for all normalizers.
     """
     model = model.float()
     dataset = dataset.repeat(10)

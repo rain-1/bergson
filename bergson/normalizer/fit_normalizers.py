@@ -118,7 +118,7 @@ class NormalizerCollector(HookCollectorBase):
 
         self.callback(name, P)
 
-        if module._has_bias:
+        if module._collect_bias:
             # bias_grad = g.sum(dim=seq), shape [N, O]
             # bias_avg_sq = E[bias_grad^2], accumulated as sum then divided later
             bias_sq = g.sum(dim=1).float().square().sum(0)  # [O]
@@ -137,13 +137,13 @@ class NormalizerCollector(HookCollectorBase):
             if isinstance(normalizer, AdamNormalizer):
                 normalizer.weight_avg_sq.div_(len(self.data))
                 if dist.is_initialized():
-                    dist.all_reduce(normalizer.weight_avg_sq, op=dist.ReduceOp.AVG)
+                    dist.all_reduce(normalizer.weight_avg_sq, op=dist.ReduceOp.SUM)
             elif isinstance(normalizer, AdafactorNormalizer):
                 normalizer.row.div_(len(self.data))
                 normalizer.col.div_(len(self.data))
                 if dist.is_initialized():
-                    dist.all_reduce(normalizer.row, op=dist.ReduceOp.AVG)
-                    dist.all_reduce(normalizer.col, op=dist.ReduceOp.AVG)
+                    dist.all_reduce(normalizer.row, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(normalizer.col, op=dist.ReduceOp.SUM)
 
         # Post-process bias accumulators
         for name, normalizer in self.weight_normalizers.items():
@@ -151,7 +151,7 @@ class NormalizerCollector(HookCollectorBase):
                 bias_sq = self.bias_accumulators[name]
                 bias_sq.div_(len(self.data))
                 if dist.is_initialized():
-                    dist.all_reduce(bias_sq, op=dist.ReduceOp.AVG)
+                    dist.all_reduce(bias_sq, op=dist.ReduceOp.SUM)
                 normalizer.bias_avg_sq = bias_sq
 
         if self.rank == 0:

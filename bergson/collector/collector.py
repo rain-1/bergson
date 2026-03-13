@@ -122,8 +122,8 @@ class HookCollectorBase(ContextDecorator, ABC):
 
         # Validate that normalizers have bias_avg_sq when bias collection is enabled
         if self.processor.include_bias and self.processor.normalizers:
-            for name, (_, _, has_bias) in self.target_info.items():
-                if not has_bias:
+            for name, (_, _, collect_bias) in self.target_info.items():
+                if not collect_bias:
                     continue
                 normalizer = self.processor.normalizers.get(name)
                 assert normalizer is None or normalizer.bias_avg_sq is not None, (
@@ -157,7 +157,8 @@ class HookCollectorBase(ContextDecorator, ABC):
             (e.g., "*.lm_head").
 
         Returns:
-            Dictionary mapping module names to (device, weight_shape, has_bias) tuples.
+            Dictionary mapping module names to
+                (device, weight_shape, collect_bias) tuples.
         """
         target_info = {}
         for name, layer in model.named_modules():
@@ -170,12 +171,12 @@ class HookCollectorBase(ContextDecorator, ABC):
             if filter_modules and fnmatchcase(name, filter_modules):
                 continue
 
-            has_bias = getattr(layer, "bias", None) is not None and include_bias
+            collect_bias = getattr(layer, "bias", None) is not None and include_bias
 
             target_info[name] = (
                 layer.weight.device,
                 layer.weight.shape,
-                has_bias,
+                collect_bias,
             )
         return target_info
 
@@ -233,7 +234,7 @@ class HookCollectorBase(ContextDecorator, ABC):
         )
 
         shapes = {}
-        for name, (_, target_shape, has_bias) in self.target_info.items():
+        for name, (_, target_shape, collect_bias) in self.target_info.items():
             if name in self.attention_cfgs:
                 attention_cfg = self.attention_cfgs[name]
                 if proj_shape:
@@ -247,7 +248,7 @@ class HookCollectorBase(ContextDecorator, ABC):
                     attention_shape[attention_cfg.head_dim - 2] = (
                         attention_cfg.head_size
                     )
-                    if has_bias:
+                    if collect_bias:
                         attention_shape[-1] += 1
                     head_shape = torch.Size(attention_shape)
 
@@ -262,7 +263,7 @@ class HookCollectorBase(ContextDecorator, ABC):
                     shapes[name] = proj_shape
                 else:
                     grad_shape = list(target_shape)
-                    if has_bias:
+                    if collect_bias:
                         grad_shape[-1] += 1
                     shapes[name] = torch.Size(grad_shape)
 
@@ -319,7 +320,7 @@ class HookCollectorBase(ContextDecorator, ABC):
 
             # Store module name for use in hook callbacks
             layer._name = name  # type: ignore[attr-defined]
-            layer._has_bias = self.target_info[name][2]  # type: ignore[attr-defined]
+            layer._collect_bias = self.target_info[name][2]  # type: ignore[attr-defined]
 
             # Register hooks
             fwd_hook = layer.register_forward_hook(self._process_input)
@@ -353,13 +354,6 @@ class HookCollectorBase(ContextDecorator, ABC):
 
     def __exit__(self, exc_type, exc, tb):
         """Clean up hooks and allow subclass cleanup."""
-
-        # Restore in_features for modules where bias appending incremented it
-        for name, (_, target_shape, has_bias) in self.target_info.items():
-            if has_bias:
-                layer = self.model.get_submodule(name)
-                setattr(layer, LayerAdapter.in_attr(layer), target_shape[-1])
-
         # Clean up temporary attributes
         for layer in self.model.modules():
             if hasattr(layer, "_inputs"):
@@ -421,21 +415,20 @@ class HookCollectorBase(ContextDecorator, ABC):
             a_factor = a_factor.rsqrt()
             a = a * a_factor.type_as(a)  # [N, S, I] * [I] → [N, S, I]
 
-        # For normalizer cases, bias normalization differs from weight normalization,
-        # so we handle bias separately in backward hook.
-        if module._has_bias and normalizer is None:
-            ones = torch.ones(a.size(0), a.size(1), 1, device=a.device, dtype=a.dtype)
-            a = torch.cat([a, ones], dim=-1)  # [N, S, I+1]
-            i = i + 1
-            setattr(module, LayerAdapter.in_attr(module), i)
-
-        # Only defer a-projection when the normalizer will handle bias in backward.
-        _defer_proj = module._has_bias and normalizer
-        if p is not None and not _defer_proj:
+        # Defer a-projection when bias is included — backward needs full a to
+        # compute the outer product before concatenating the bias column.
+        if p is not None and not module._collect_bias:
             a_projection = self.projection(name, p, i, "right", a.device, a.dtype).T
             a = a @ a_projection  # [N, S, I(+1)] @ [I(+1), p] → [N, S, p]
 
         module._inputs = a
+
+    def double_sided_projection(
+        self, name: str, P: Tensor, g: Tensor, p: int, o: int, i: int
+    ):
+        g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
+        a_projection = self.projection(name, p, i, "right", g.device, g.dtype).T
+        return g_projection @ P @ a_projection
 
     def _compute_gradient(self, module: nn.Module, g: Float[Tensor, "N S O"]) -> Tensor:
         """Compute the per-sample (or per-token) gradient from cached activations
@@ -452,57 +445,54 @@ class HookCollectorBase(ContextDecorator, ABC):
         i = getattr(module, LayerAdapter.in_attr(module))
         o = getattr(module, LayerAdapter.out_attr(module))
         normalizer = self.processor.normalizers.get(name)
-        bias_grad = None
 
         if isinstance(normalizer, AdamNormalizer):
+            # Bias gradient collection enabled
+            # Clone g before normalize_bias since it mutates in-place (div_)
+            if normalizer.bias_avg_sq is not None:
+                if self.attribute_tokens:
+                    bias_grad = normalizer.normalize_bias(g.clone())  # [N, S, O]
+                else:
+                    bias_grad = normalizer.normalize_bias(g.clone()).sum(
+                        dim=1
+                    )  # [N, O]
+            else:
+                bias_grad = None
+
             if self.attribute_tokens:
                 # Per-position outer product: [N,S,O,1]*[N,S,1,I] → [N,S,O,I]
                 P = g.unsqueeze(-1) * a.unsqueeze(-2)
-                P = normalizer.normalize_(P)  # broadcasts [O,I] over [N,S,O,I]
-                if module._has_bias and normalizer.bias_avg_sq is not None:
-                    # Per-token bias: [N, S, O] / [O] → [N, S, O]
-                    bias_col = g / normalizer.bias_avg_sq.sqrt().add(1e-8)
-                    P = torch.cat([P, bias_col.unsqueeze(-1)], dim=-1)
+
+                P = normalizer.normalize_weight(P)  # broadcasts [O,I] over [N,S,O,I]
+                if bias_grad is not None:
+                    P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
                     i += 1
+
                 if p is not None:
-                    g_projection = self.projection(
-                        name, p, o, "left", g.device, g.dtype
-                    )
-                    a_projection = self.projection(
-                        name, p, i, "right", g.device, g.dtype
-                    ).T
-                    P = g_projection @ P @ a_projection  # [N, S, p, q]
+                    P = self.double_sided_projection(name, P, g, p, o, i)
+
                 P = P.flatten(2)  # [N, S, grad_dim]
                 P = P[self._current_valid_mask]  # [total_valid, grad_dim]
             else:
-                P = g.mT @ a  # [N, O, S] @ [N, S, I] → [N, O, I]
-                P = normalizer.normalize_(P)
+                P = g.mT @ a  # [N,O,S] @ [N,S,I] → [N,O,I]
 
-                if module._has_bias and normalizer.bias_avg_sq is not None:
-                    bias_grad = g.sum(dim=1) / normalizer.bias_avg_sq.sqrt().add(1e-8)
-                    P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
+                P = normalizer.normalize_weight(P)  # broadcasts [O,I] over [N,O,I]
+                if bias_grad is not None:
+                    P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N,O,I+1]
                     i += 1
 
                 if p is not None:
-                    g_projection = self.projection(
-                        name, p, o, "left", g.device, g.dtype
-                    )
-                    a_projection = self.projection(
-                        name, p, i, "right", g.device, g.dtype
-                    ).T
-                    P = g_projection @ P @ a_projection
+                    P = self.double_sided_projection(name, P, g, p, o, i)
+
         elif isinstance(normalizer, AdafactorNormalizer):
-            bias_per_token = None
-            if module._has_bias and normalizer.bias_avg_sq is not None:
-                # Compute bias from RAW g (before row normalization)
+            # Bias gradient collection enabled
+            if normalizer.bias_avg_sq is not None:
                 if self.attribute_tokens:
-                    bias_per_token = (
-                        g * normalizer.bias_avg_sq.add(1e-30).rsqrt()
-                    )  # [N, S, O]
+                    bias_grad = normalizer.normalize_bias(g)  # [N, S, O]
                 else:
-                    bias_grad = (
-                        g.sum(dim=1) * normalizer.bias_avg_sq.add(1e-30).rsqrt()
-                    )  # [N, O]
+                    bias_grad = normalizer.normalize_bias(g).sum(dim=1)  # [N, O]
+            else:
+                bias_grad = None
 
             # Apply row normalization to g (for weights)
             g_factor = normalizer.row.add(1e-30)
@@ -510,22 +500,15 @@ class HookCollectorBase(ContextDecorator, ABC):
             g = g * g_factor.type_as(g)  # [N, S, O] * [O] → [N, S, O]
 
             if self.attribute_tokens:
-                if bias_per_token is not None:
-                    # a was NOT projected in forward (bias needs combined proj)
+                if bias_grad is not None:
+                    # a was not projected in forward
                     # [N, S, O, 1] * [N, S, 1, I] → [N, S, O, I]
                     P = g.unsqueeze(-1) * a.unsqueeze(-2)
-                    P = torch.cat(
-                        [P, bias_per_token.unsqueeze(-1)], dim=-1
-                    )  # [N, S, O, I+1]
+                    # [N, S, O, I+1]
+                    P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
                     i += 1
                     if p is not None:
-                        g_projection = self.projection(
-                            name, p, o, "left", g.device, g.dtype
-                        )
-                        a_projection = self.projection(
-                            name, p, i, "right", a.device, a.dtype
-                        ).T
-                        P = g_projection @ P @ a_projection
+                        P = self.double_sided_projection(name, P, g, p, o, i)
                 else:
                     # a was already projected in forward; project g individually
                     if p is not None:
@@ -537,43 +520,54 @@ class HookCollectorBase(ContextDecorator, ABC):
                     P = g.unsqueeze(-1) * a.unsqueeze(-2)
                 P = P.flatten(2)  # [N, S, grad_dim]
                 P = P[self._current_valid_mask]  # [total_valid, grad_dim]
-            elif bias_grad is not None:
-                P = g.mT @ a  # [N, O, I]
-
-                # Append pre-normalized bias gradient
-                P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
-                i += 1
-
-                # Project the entire normalized gradient
-                if p is not None:
-                    g_projection = self.projection(
-                        name, p, o, "left", g.device, g.dtype
-                    )
-                    a_projection = self.projection(
-                        name, p, i, "right", a.device, a.dtype
-                    ).T
-                    P = g_projection @ P @ a_projection
             else:
-                if p is not None:
-                    g_projection = self.projection(
-                        name, p, o, "left", g.device, g.dtype
-                    )
-                    g = g @ g_projection.T  # [N, S, p]
+                if bias_grad is not None:
+                    P = g.mT @ a  # [N, O, I]
+                    P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
+                    i += 1
+                    if p is not None:
+                        P = self.double_sided_projection(name, P, g, p, o, i)
+                else:
+                    # a was already projected in forward; project g individually
+                    if p is not None:
+                        g_projection = self.projection(
+                            name, p, o, "left", g.device, g.dtype
+                        )
+                        g = g @ g_projection.T  # [N, S, p]
 
-                P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
+                    P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
         else:
             # No normalizer
-            if p is not None:
+            if module._collect_bias:
+                if self.attribute_tokens:
+                    bias_grad = g  # [N, S, O]
+                else:
+                    bias_grad = g.sum(dim=1)  # [N, O]
+            else:
+                bias_grad = None
+
+            # a is projected in forward unless deferred by bias collection
+            if p is not None and not module._collect_bias:
                 g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
                 g = g @ g_projection.T  # [N, S, p]
 
             if self.attribute_tokens:
                 # [N, S, O/p, 1] * [N, S, 1, I/q] → [N, S, O/p, I/q]
                 P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                if bias_grad is not None:
+                    P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
+                    i += 1
+                if p is not None and module._collect_bias:
+                    P = self.double_sided_projection(name, P, g, p, o, i)
                 P = P.flatten(2)  # [N, S, grad_dim]
                 P = P[self._current_valid_mask]  # [total_valid, grad_dim]
             else:
-                P = g.mT @ a  # [N, O/p, I(+1)/p]
+                P = g.mT @ a  # [N, O/p, I/p]
+                if bias_grad is not None:
+                    P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
+                    i += 1
+                if p is not None and module._collect_bias:
+                    P = self.double_sided_projection(name, P, g, p, o, i)
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
         return P
@@ -711,6 +705,7 @@ class CollectorComputer:
                 batch = self.data[indices]
 
                 # Compute padded tensors and valid_mask before entering context
+                # TODO check if valid_mask has bug
                 x, y, valid_mask = pad_and_tensor(
                     batch["input_ids"],
                     labels=batch.get("labels"),
