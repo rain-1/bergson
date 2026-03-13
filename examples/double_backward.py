@@ -14,7 +14,12 @@ from torchopt.typing import Numeric
 from transformers import AutoTokenizer, GPTNeoXConfig, GPTNeoXForCausalLM
 
 from bergson.config import DistributedConfig
-from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp, dist_main
+from bergson.distributed import (
+    dist_main,
+    grad_tree,
+    launch_distributed_run,
+    simple_fsdp,
+)
 from bergson.trainer import BackwardState, DataStream, Trainer
 from bergson.utils.math import weighted_causal_lm_ce
 
@@ -88,7 +93,7 @@ def worker(global_rank: int, rank: int, world_size: int, dataset, run_cfg: RunCo
         )
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
-            model = simple_fsdp(model) # type: ignore
+            model = simple_fsdp(model)  # type: ignore
 
     def schedule(step: Numeric) -> Numeric:
         if step < run_cfg.warmup_steps:
