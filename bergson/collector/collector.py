@@ -120,17 +120,6 @@ class HookCollectorBase(ContextDecorator, ABC):
                 f"{unknown}. Available modules: {set(self.target_info)}"
             )
 
-        # Validate that normalizers have bias_avg_sq when bias collection is enabled
-        if self.processor.include_bias and self.processor.normalizers:
-            for name, (_, _, collect_bias) in self.target_info.items():
-                if not collect_bias:
-                    continue
-                normalizer = self.processor.normalizers.get(name)
-                assert normalizer is None or normalizer.bias_avg_sq is not None, (
-                    f"Module '{name}' has include_bias=True but normalizer "
-                    f"has no bias_avg_sq"
-                )
-
         # Allow subclasses to perform custom initialization
         self.setup()
 
@@ -447,9 +436,8 @@ class HookCollectorBase(ContextDecorator, ABC):
         normalizer = self.processor.normalizers.get(name)
 
         if isinstance(normalizer, AdamNormalizer):
-            # Bias gradient collection enabled
-            # Clone g before normalize_bias since it mutates in-place (div_)
-            if normalizer.bias_avg_sq is not None:
+            if self.processor.include_bias:
+                # Clone g before normalize_bias since it mutates in-place (div_)
                 if self.attribute_tokens:
                     bias_grad = normalizer.normalize_bias(g.clone())  # [N, S, O]
                 else:
@@ -485,8 +473,7 @@ class HookCollectorBase(ContextDecorator, ABC):
                     P = self.double_sided_projection(name, P, g, p, o, i)
 
         elif isinstance(normalizer, AdafactorNormalizer):
-            # Bias gradient collection enabled
-            if normalizer.bias_avg_sq is not None:
+            if self.processor.include_bias:
                 if self.attribute_tokens:
                     bias_grad = normalizer.normalize_bias(g)  # [N, S, O]
                 else:

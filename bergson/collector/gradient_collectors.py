@@ -12,6 +12,7 @@ from torch import Tensor
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
+from bergson.gradients import GradientProcessor
 from bergson.process_preconditioners import process_preconditioners
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype
@@ -32,6 +33,9 @@ class GradientCollector(HookCollectorBase):
 
     cfg: IndexConfig
     """Configuration for gradient index."""
+
+    processor: GradientProcessor
+    """Configuration for processing and compressing gradients."""
 
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""

@@ -432,7 +432,7 @@ class TestGradientCollectorCallback:
 
             # Verify bias handling
             if include_bias and layer.bias is not None:
-                bias_state = optimizer.state[layer.bias]
+                bias_state = optimizer.state[layer.bias]  # type: ignore
                 raw_bias_exp_avg_sq = bias_state["exp_avg_sq"]
                 expected_bias = raw_bias_exp_avg_sq / lr_sq
 
