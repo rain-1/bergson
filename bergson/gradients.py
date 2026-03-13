@@ -334,7 +334,8 @@ class AdafactorNormalizer(Normalizer):
 @dataclass
 class AdamNormalizer(Normalizer):
     """
-    Contains the second moments of the gradients. Mutates gradient values in-place.
+    Contains the second moments of the gradients. Weight normalization mutates gradient
+    values in-place.
 
     Args:
         weight_avg_sq: Second moments for weights [O, I]
@@ -366,7 +367,7 @@ class AdamNormalizer(Normalizer):
         denom = self.bias_avg_sq.sqrt()
 
         # Adam-style epsilon is added outside the square root
-        return grad.div_(denom.add_(eps))
+        return grad / (denom.add_(eps))
 
     def to_adafactor(self) -> AdafactorNormalizer:
         """

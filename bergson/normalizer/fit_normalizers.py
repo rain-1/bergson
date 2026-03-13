@@ -36,9 +36,6 @@ class NormalizerCollector(HookCollectorBase):
     cfg: IndexConfig
     """Configuration for gradient index."""
 
-    processor: GradientProcessor
-    """Configuration for processing and compressing gradients."""
-
     normalizers: dict[str, Normalizer] = field(default_factory=dict)
 
     def adafactor_update(
@@ -163,17 +160,20 @@ class NormalizerCollector(HookCollectorBase):
                 normalizer.weight_avg_sq.div_(n)
                 if dist.is_initialized():
                     dist.all_reduce(normalizer.weight_avg_sq, op=dist.ReduceOp.SUM)
+                if normalizer.bias_avg_sq is not None:
+                    normalizer.bias_avg_sq.div_(n)
+                    if dist.is_initialized():
+                        dist.all_reduce(normalizer.bias_avg_sq, op=dist.ReduceOp.SUM)
             elif isinstance(normalizer, AdafactorNormalizer):
                 normalizer.row.div_(n)
                 normalizer.col.div_(n)
                 if dist.is_initialized():
                     dist.all_reduce(normalizer.row, op=dist.ReduceOp.SUM)
                     dist.all_reduce(normalizer.col, op=dist.ReduceOp.SUM)
-
-            if normalizer.bias_avg_sq is not None:
-                normalizer.bias_avg_sq.div_(n)
-                if dist.is_initialized():
-                    dist.all_reduce(normalizer.bias_avg_sq, op=dist.ReduceOp.SUM)
+                if normalizer.bias_avg_sq is not None:
+                    normalizer.bias_avg_sq.div_(n)
+                    if dist.is_initialized():
+                        dist.all_reduce(normalizer.bias_avg_sq, op=dist.ReduceOp.SUM)
 
         if self.rank == 0:
             self.processor.save(self.cfg.partial_run_path)

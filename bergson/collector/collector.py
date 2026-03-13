@@ -439,11 +439,9 @@ class HookCollectorBase(ContextDecorator, ABC):
             if self.processor.include_bias:
                 # Clone g before normalize_bias since it mutates in-place (div_)
                 if self.attribute_tokens:
-                    bias_grad = normalizer.normalize_bias(g.clone())  # [N, S, O]
+                    bias_grad = normalizer.normalize_bias(g)  # [N, S, O]
                 else:
-                    bias_grad = normalizer.normalize_bias(g.clone()).sum(
-                        dim=1
-                    )  # [N, O]
+                    bias_grad = normalizer.normalize_bias(g).sum(dim=1)  # [N, O]
             else:
                 bias_grad = None
 
