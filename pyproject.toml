@@ -17,11 +17,13 @@ dependencies = [
     "ml_dtypes",
     "natsort",
     "numpy",
+    "scipy",
     "peft>=0.17.0",
     "pyarrow",
     "simple-parsing",
     "torch",
-    "transformers"
+    "transformers",
+    "torchopt",
 ]
 version = "0.8.0"
 [project.optional-dependencies]

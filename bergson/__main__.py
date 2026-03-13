@@ -5,6 +5,7 @@ from simple_parsing import ArgumentParser, ConflictResolution
 
 from .build import build
 from .config import (
+    DistributedConfig,
     HessianConfig,
     IndexConfig,
     PreprocessConfig,
@@ -12,6 +13,7 @@ from .config import (
     ScoreConfig,
     TrackstarConfig,
 )
+from .double_backward import DoubleBackwardConfig, double_backward
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .score.score import score_dataset
@@ -142,10 +144,24 @@ class Trackstar:
 
 
 @dataclass
+class Magic:
+    """Run MAGIC attribution."""
+
+    run_cfg: DoubleBackwardConfig
+    dist_cfg: DistributedConfig
+
+    def execute(self):
+        """Run MAGIC attribution."""
+        double_backward(self.run_cfg, self.dist_cfg)
+
+
+@dataclass
 class Main:
     """Routes to the subcommands."""
 
-    command: Union[Build, Query, Preconditioners, Reduce, Score, Hessian, Trackstar]
+    command: Union[
+        Build, Query, Preconditioners, Reduce, Score, Hessian, Trackstar, Magic
+    ]
 
     def execute(self):
         """Run the script."""
