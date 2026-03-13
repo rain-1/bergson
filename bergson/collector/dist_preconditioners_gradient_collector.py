@@ -9,9 +9,8 @@ from jaxtyping import Float
 from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, ReduceConfig
+from bergson.config import IndexConfig
 from bergson.process_preconditioners import process_preconditioners
-from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype
 
 
