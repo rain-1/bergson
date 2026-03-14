@@ -255,9 +255,10 @@ def worker(
     subsets = perm.chunk(run_cfg.num_subsets)
 
     save_fut.result()  # ensure state0 is saved before loading in loop
-    fwd_state.load(path0)
 
     for subset in subsets:
+        fwd_state.load(path0)
+
         stream.weights.fill_(1.0)
         stream.weights[subset] = 0.0
 
