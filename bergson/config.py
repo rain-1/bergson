@@ -44,6 +44,12 @@ class DataConfig:
     and optionally `doc_to_target` and `doc_to_choice`. MCQA YAML
     available at `bergson/templates/mcqa.yaml`."""
 
+    chunked: bool = False
+    """Use GPT-style chunk-and-tokenize preprocessing: concatenate all
+    documents separated by EOS, then split into fixed-length chunks.
+    When enabled, the dataset is pre-tokenized before training and the
+    tokenizer is not called per-batch."""
+
     data_args: str = ""
     """Arguments to pass to the dataset constructor in the format
     arg1=val1,arg2=val2."""
