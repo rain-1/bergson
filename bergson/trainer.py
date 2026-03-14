@@ -111,25 +111,16 @@ class DataStream:
         )
         raw = self.dataset[indices]
 
-        if self.processor is None:
-            # Pre-tokenized dataset (e.g. from chunk_and_tokenize)
-            input_ids = raw["input_ids"].detach().clone()
-            x = {
-                "input_ids": input_ids,
-                "attention_mask": torch.ones_like(input_ids),
-                "labels": input_ids.clone(),
-            }
-        else:
-            # padding="max_length" ensures uniform shape across ranks without
-            # needing to process all ranks' examples together.
-            x = self.processor(
-                raw[self.input_key],
-                max_length=self.max_length,
-                padding="max_length",
-                return_tensors="pt",
-                truncation=True,
-            )
-            x["labels"] = x["input_ids"]
+        # padding="max_length" ensures uniform shape across ranks without needing
+        # to process all ranks' examples together.
+        x = self.processor(
+            raw[self.input_key],
+            max_length=self.max_length,
+            padding="max_length",
+            return_tensors="pt",
+            truncation=True,
+        )
+        x["labels"] = x["input_ids"]
         x["example_weight"] = self.weights[
             i * self.batch_size
             + self.rank : (i + 1) * self.batch_size : self.world_size
