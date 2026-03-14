@@ -15,6 +15,7 @@ from torchopt.pytree import tree_iter
 from torchopt.typing import Numeric
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from bergson.chunk_and_tokenize import chunk_and_tokenize
 from bergson.config import DataConfig, DistributedConfig
 from bergson.data import load_data_string
 from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp
@@ -74,6 +75,15 @@ class DoubleBackwardConfig:
     seed: int = 42
     """Random seed for subset permutation."""
 
+    eps_root: float = 1e-8
+    """Epsilon root for AdamW optimizer. Use 1e-2 for better stability
+    with small models."""
+
+    untie_weights: bool = False
+    """Untie the lm_head weights from the embedding weights by cloning.
+    Required for models with tied weights (e.g. GPT-2) to avoid errors
+    during double backward."""
+
 
 def compute_query_gradients(
     trainer: Trainer,
@@ -129,14 +139,35 @@ def worker(
         attn_implementation="eager",
     )
     model.loss_function = weighted_causal_lm_ce
+
+    if run_cfg.untie_weights and hasattr(model, "lm_head"):
+        model.lm_head.weight = torch.nn.Parameter(
+            model.lm_head.weight.data.clone()
+        )
+
     model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
     if run_cfg.grad_checkpointing:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs=dict(use_reentrant=False),
         )
 
-    processor = AutoTokenizer.from_pretrained(run_cfg.model)
-    processor.pad_token = processor.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(run_cfg.model)
+    tokenizer.pad_token = tokenizer.eos_token
+
+    if run_cfg.data.chunked:
+        train_dataset = chunk_and_tokenize(
+            train_dataset, tokenizer, max_seq_len=run_cfg.max_length
+        )
+
+    if run_cfg.query.chunked:
+        query_dataset = chunk_and_tokenize(
+            query_dataset, tokenizer, max_seq_len=run_cfg.max_length
+        )
+        query_processor = None
+    else:
+        query_processor = tokenizer
+
+    processor = None if run_cfg.data.chunked else tokenizer
 
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
@@ -165,7 +196,7 @@ def worker(
     opt = torchopt.adamw(
         schedule,
         betas=(0.95, 0.975),
-        eps_root=1e-8,
+        eps_root=run_cfg.eps_root,
     )
     trainer, fwd_state = Trainer.initialize(model, opt)
 
@@ -192,7 +223,7 @@ def worker(
     # Compute query gradients
     query_stream = DataStream(
         query_dataset,
-        processor,
+        query_processor,
         batch_size=run_cfg.batch_size,
         num_batches=run_cfg.query_batches,
         device=f"cuda:{rank}",
@@ -255,14 +286,26 @@ def worker(
     subsets = perm.chunk(run_cfg.num_subsets)
 
     save_fut.result()  # ensure state0 is saved before loading in loop
-    fwd_state.load(path0)
 
     for subset in subsets:
+        fwd_state.load(path0)
+        fresh_opt = torchopt.adamw(
+            schedule,
+            betas=(0.95, 0.975),
+            eps_root=run_cfg.eps_root,
+        )
+        lds_trainer = Trainer(model, fresh_opt)
+        fwd_state = TrainerState(
+            fwd_state.params,
+            fresh_opt.init(fwd_state.params),
+            fwd_state.buffers,
+        )
+
         stream.weights.fill_(1.0)
         stream.weights[subset] = 0.0
 
         for x in stream:
-            fwd_state = trainer.step(fwd_state, x)
+            fwd_state = lds_trainer.step(fwd_state, x)
 
         with fwd_state.activate(model):
             eval_batch = query_stream[0]
