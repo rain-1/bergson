@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from bergson.config import FaissConfig
+from bergson.process_grads import precondition_flat_grads
 
 if TYPE_CHECKING:
     import faiss  # noqa: F401  # pyright: ignore[reportMissingImports]
@@ -205,6 +206,7 @@ class FaissIndex:
         faiss_cfg: FaissConfig,
         device: str,
         unit_norm: bool,
+        preconditioners: dict[str, torch.Tensor],
     ):
         faiss = _require_faiss()
 
@@ -258,6 +260,9 @@ class FaissIndex:
                 print(f"Building shard {shard_idx}...")
 
             grads_chunk = np.concatenate(buffer_parts, axis=0)
+            grads_chunk = precondition_flat_grads(
+                torch.from_numpy(grads_chunk), preconditioners, ordered_modules
+            ).numpy()
             buffer_parts.clear()
 
             index = faiss.index_factory(

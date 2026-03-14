@@ -38,6 +38,12 @@ class DataConfig:
     truncation: bool = False
     """Whether to truncate long documents to fit the token budget."""
 
+    format_template: str = ""
+    """Path to a YAML containing a Jinja2 template specifying how to
+    format dataset rows into text. The YAML must contain `doc_to_text`
+    and optionally `doc_to_target` and `doc_to_choice`. MCQA YAML
+    available at `bergson/templates/mcqa.yaml`."""
+
     data_args: str = ""
     """Arguments to pass to the dataset constructor in the format
     arg1=val1,arg2=val2."""
@@ -126,7 +132,7 @@ class IndexConfig:
     fsdp: bool = False
     """Whether to use Fully Sharded Data Parallel (FSDP) for collecting gradients."""
 
-    precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "auto"
+    precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "fp32"
     """Precision (dtype) to use for the model parameters."""
 
     projection_dim: int = 16
@@ -155,13 +161,13 @@ class IndexConfig:
     """Type of normalizer to use for the gradients."""
 
     skip_preconditioners: bool = False
-    """Whether to skip computing preconditioners for the gradients."""
+    """Whether to skip estimating preconditioner statistics"""
 
     skip_index: bool = False
     """Whether to skip building the gradient index."""
 
     stats_sample_size: int | None = 10_000
-    """Number of examples to use for estimating processor statistics."""
+    """Number of examples to use for estimating normalizer statistics."""
 
     drop_columns: bool = True
     """Only save the new dataset columns. If false, the original dataset
@@ -217,6 +223,9 @@ class IndexConfig:
     """Whether to compute per-token gradients instead of per-example.
     Incompatible with reduce mode."""
 
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
+
     @property
     def partial_run_path(self) -> Path:
         """Temporary path to use while writing build artifacts."""
@@ -256,13 +265,33 @@ class QueryConfig:
     faiss: bool = False
     """Whether to use FAISS for the query."""
 
-    reverse: bool = False
-    """Whether to return results in reverse order
-    (lowest influences instead of highest)."""
+    top_k: int = 5
+    """Number of top (and bottom) results to return per query."""
 
     record: str = ""
     """Path to a CSV file for recording query results. Each query appends
-    its top results as rows with columns: query, result, result_index, score."""
+    its top and bottom results as rows with columns:
+    query, direction, result, result_index, score."""
+
+
+@dataclass
+class PreprocessConfig:
+    """Config for gradient preprocessing, shared across build, reduce, and score."""
+
+    unit_normalize: bool = False
+    """Whether to unit normalize the gradients."""
+
+    preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner."""
+
+    aggregation: Literal["mean", "sum", "none"] = "none"
+    """Method for aggregating the gradients. In score, only query
+    gradients will be aggregated."""
+
+    normalize_aggregated_grad: bool = False
+    """Whether to unit normalize the aggregated gradient. This has
+    no effect on future relative score rankings but does affect score
+    magnitudes."""
 
 
 @dataclass
@@ -272,51 +301,21 @@ class ScoreConfig:
     query_path: str = ""
     """Path to the existing query index."""
 
-    score: Literal["mean", "nearest", "individual"] = "mean"
+    score: Literal["nearest", "individual"] = "individual"
     """Method for scoring the gradients with the query.
-        `mean`: compute each gradient's similarity to the mean
-            query gradient.
         `nearest`: compute each gradient's similarity to the most
             similar query gradient (the maximum score).
         `individual`: compute a separate score for each query gradient."""
 
-    query_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner to be applied to
-    the query dataset gradients."""
-
-    index_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner to be applied to
-    the query dataset gradients. This does not affect the
-    ability to compute a new preconditioner during the query."""
-
-    mixing_coefficient: float = 0.99
-    """Coefficient to weight the application of the query preconditioner
-    and the pre-computed index preconditioner. 0.0 means only use the
-    index preconditioner and 1.0 means only use the query preconditioner."""
-
-    modules: list[str] = field(default_factory=list)
-    """Modules to use for the query. If empty, all modules will be used."""
-
-    unit_normalize: bool = False
-    """Whether to unit normalize the gradients before computing the scores."""
-
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
 
-    precision: Literal["auto", "bf16", "fp16", "fp32"] = "auto"
+    precision: Literal["auto", "bf16", "fp16", "fp32"] = "fp32"
     """Precision (dtype) to convert the query and index gradients to before
     computing the scores. If "auto", the model's gradient dtype is used."""
 
-
-@dataclass
-class ReduceConfig:
-    """Config for reducing the gradients."""
-
-    method: Literal["mean", "sum"] = "mean"
-    """Method for reducing the gradients."""
-
-    unit_normalize: bool = False
-    """Whether to unit normalize the gradients before reducing them."""
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
 
 
 @dataclass
@@ -379,3 +378,17 @@ class TrackstarConfig:
 
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
+
+    target_downweight_components: int = 1000
+    """Number of gradient components to downweight via automatic lambda
+    selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
+    computed so that the sorted singular-value curves of the query and
+    index preconditioners intersect at this component. Typical value is
+    ~1000 out of ~65K total components."""
+
+    num_stats_sample_preconditioner: bool = True
+    """Whether to use num_stats_sample items or the full dataset to
+    compute preconditioners."""
+
+    resume: bool = False
+    """Skip pipeline steps whose output directory already exists."""

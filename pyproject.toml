@@ -12,10 +12,12 @@ license = {text = "MIT License"}
 dependencies = [
     "accelerate", # For device_map in from_pretrained
     "datasets",
+    "jinja2",
     "jaxtyping>=0.3.3",
     "ml_dtypes",
     "natsort",
     "numpy",
+    "scipy",
     "peft>=0.17.0",
     "pyarrow",
     "simple-parsing",
@@ -23,7 +25,7 @@ dependencies = [
     "torchopt",
     "transformers<4.56.0" # 4.56.0 increases fp error from operation order
 ]
-version = "0.6.2"
+version = "0.8.0"
 [project.optional-dependencies]
 dev = [
     "pre-commit",

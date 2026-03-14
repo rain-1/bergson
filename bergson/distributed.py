@@ -22,7 +22,7 @@ from torch.utils.checkpoint import (
     create_selective_checkpoint_contexts,
 )
 
-from .config import DistributedConfig
+from bergson.config import DistributedConfig
 
 
 def grad_tree(
@@ -149,11 +149,6 @@ def simple_fsdp(model: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
-Args = ParamSpec("Args")
-Worker = Callable[Concatenate[int, int, int, Args], None]
-"""A worker function for distributed training."""
-
-
 def dist_worker(
     worker: Callable,
     *worker_args,
@@ -175,7 +170,7 @@ def dist_worker(
 
 def launch_distributed_run(
     process_name: str,
-    worker: Worker,
+    worker,
     const_worker_args: list[Any],
     dist_config: DistributedConfig | None = None,
 ):
@@ -234,3 +229,47 @@ def launch_distributed_run(
         finally:
             if ctx is not None:
                 ctx.close()  # Kill any processes that are still running
+
+
+Args = ParamSpec("Args")
+Worker = Callable[Concatenate[int, int, int, Args], None]
+"""A worker function for distributed training."""
+
+
+def simple_dist_worker(rank: int, world_size: int, dataset, worker: Worker):
+    try:
+        worker(rank, world_size, dataset)
+    finally:
+        dist.destroy_process_group()
+
+
+def dist_main(dataset, worker: Worker):
+    world_size = torch.cuda.device_count()
+    if world_size <= 1:
+        # Run the worker directly if no distributed training is needed. This is great
+        # for debugging purposes.
+        worker(0, 1, dataset)
+    else:
+        # Set up multiprocessing and distributed training
+        mp.set_sharing_strategy("file_system")
+
+        # Find an available port for distributed training
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            _, port = s.getsockname()
+
+        ctx = start_processes(
+            "train",
+            simple_dist_worker,
+            args={i: (i, world_size, dataset, worker) for i in range(world_size)},
+            envs={
+                i: {
+                    "LOCAL_RANK": str(i),
+                    "MASTER_ADDR": "localhost",
+                    "MASTER_PORT": str(port),
+                }
+                for i in range(world_size)
+            },
+            logs_specs=DefaultLogsSpecs(),
+        )
+        ctx.wait()

@@ -1,3 +1,4 @@
+import shutil
 import warnings
 from pathlib import Path
 from typing import cast
@@ -21,9 +22,27 @@ from transformers import (
 
 from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches, load_data_string, tokenize
+from bergson.format import apply_format
 from bergson.gradients import GradientProcessor, Normalizer
 from bergson.normalizer.fit_normalizers import fit_normalizers
 from bergson.utils.utils import assert_type, get_layer_list
+
+
+def validate_run_path(index_cfg: IndexConfig):
+    """Validate the run path."""
+    if index_cfg.distributed.rank != 0:
+        return
+
+    for path in [Path(index_cfg.run_path), Path(index_cfg.partial_run_path)]:
+        if not path.exists():
+            continue
+
+        if index_cfg.overwrite:
+            shutil.rmtree(path)
+        else:
+            raise FileExistsError(
+                f"Run path {path} already exists. Use --overwrite to overwrite it."
+            )
 
 
 def create_normalizers(
@@ -79,6 +98,7 @@ def create_processor(
         processor = GradientProcessor.load(
             processor_path,
             map_location=f"cuda:{local_rank}",
+            skip_preconditioners=cfg.skip_preconditioners,
         )
     else:
         normalizers = create_normalizers(model, ds, cfg, target_modules)
@@ -296,8 +316,18 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
             f"Use --token_batch_size {default_model_max_len} or smaller."
         )
 
+    # Resolve the base model for config loading (PEFT adapters don't have
+    # a full config.json, so we need the base model path).
+    config_model: str = cfg.model
+    try:
+        peft_cfg = PeftConfig.from_pretrained(cfg.model)
+        if peft_cfg.base_model_name_or_path:
+            config_model = peft_cfg.base_model_name_or_path
+    except ValueError:
+        pass
+
     max_pos_emb = getattr(
-        AutoConfig.from_pretrained(cfg.model, revision=cfg.revision),
+        AutoConfig.from_pretrained(config_model, revision=cfg.revision),
         "max_position_embeddings",
         None,
     )
@@ -308,11 +338,25 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
 
     remove_columns = ds.column_names if cfg.drop_columns else None
 
+    tokenize_cfg = cfg.data
+    if cfg.data.format_template:
+        assert isinstance(
+            ds, Dataset
+        ), "format_template requires a non-streaming dataset"
+        ds = apply_format(ds, cfg.data.format_template)
+        tokenize_cfg = DataConfig(
+            prompt_column="prompt" if "completion" in ds.column_names else "text",
+            completion_column="completion" if "completion" in ds.column_names else "",
+            truncation=cfg.data.truncation,
+        )
+
     if not ds.column_names or "input_ids" not in ds.column_names:
         ds = ds.map(
             tokenize,
             batched=True,
-            fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer, max_length=max_length),
+            fn_kwargs=dict(
+                args=tokenize_cfg, tokenizer=tokenizer, max_length=max_length
+            ),
         )
 
     if not cfg.data.truncation and isinstance(ds, Dataset):

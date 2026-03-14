@@ -190,6 +190,9 @@ def compute_metrics(
     Uses bergson score_dataset to compute pairwise similarities instead of
     custom gradient inner product implementation.
 
+    If both query_preconditioner_path and index_preconditioner_path are given,
+    they are mixed internally before scoring.
+
     Args:
         index_path: Path to the gradient index.
         scores_path: Optional path to precomputed scores.

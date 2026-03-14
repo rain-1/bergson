@@ -9,6 +9,7 @@ We view attribution as a counterfactual question: **_If we "unlearned" this trai
 - On-the-fly queries. Query gradients without disk I/O overhead via a single pass over a dataset with a set of precomputed query gradients.
   - Experiment with multiple query strategies based on [LESS](https://arxiv.org/pdf/2402.04333).
   - Ideal for compression-free gradients.
+- Per-token scores.
 - Train‑time gradient collection. Capture gradients produced during training with a ~17% performance overhead.
 - Scalable. We use [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html), BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters.
 - Integrated with HuggingFace Transformers and Datasets. We also support on-disk datasets in a variety of formats.
@@ -16,24 +17,12 @@ We view attribution as a counterfactual question: **_If we "unlearned" this trai
 
 # Announcements
 
+**February 2026**
+- Support per-token gradients
+
 **January 2026**
 - Support EK-FAC
 - [Experimental] Support distributing preconditioners across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedPreconditioners. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
-
-**October 2025**
-- Support bias parameter gradients in linear modules: https://github.com/EleutherAI/bergson/pull/54
-- Support convolution modules: https://github.com/EleutherAI/bergson/pull/50
-- Query datasets on-the-fly: https://github.com/EleutherAI/bergson/pull/47
-
-**September 2025**
-- Save per-head attention gradients: https://github.com/EleutherAI/bergson/pull/40
-- Eigendecompose preconditioners: https://github.com/EleutherAI/bergson/pull/34
-- Dr. GRPO-based loss gradients: https://github.com/EleutherAI/bergson/pull/35
-- Choose between summing and averaging losses across tokens: https://github.com/EleutherAI/bergson/pull/36
-- Save the order training data is seen in while using the gradient collector callback for HF's Trainer/SFTTrainer: https://github.com/EleutherAI/bergson/pull/40
-  - Saving training gradients adds a ~17% wall clock overhead
-- Improved static index build ETA accuracy: https://github.com/EleutherAI/bergson/pull/41
-- Several small quality of life improvements for querying indexes: https://github.com/EleutherAI/bergson/pull/38
 
 # Installation
 
@@ -43,8 +32,16 @@ pip install bergson
 
 # Quickstart
 
+To construct an index of randomly projected gradients:
+
 ```
-bergson build runs/quickstart --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+```
+
+To collect Trackstar attribution scores:
+
+```
+bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
 ```
 
 # Usage
@@ -77,7 +74,7 @@ bergson score <output_path> --model <model_name> --dataset <dataset_name> --quer
 We provide a utility to reduce a dataset into its mean or sum query gradient, for use as a query index:
 
 ```bash
-bergson reduce <output_path> --model <model_name> --dataset <dataset_name> --method mean --unit_normalize
+bergson reduce <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize
 ```
 
 ## Index Query
@@ -182,6 +179,21 @@ pyright
 ```
 
 We use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) for releases.
+
+# Citation
+
+If you found Bergson useful in your research, please cite us:
+
+```bibtex
+@software{bergson,
+  author       = {Lucia Quirke and Nora Belrose and Louis Jaburi and William Li and David Johnston and Michael Mulet and Guillaume Martres and Goncalo Paulo and Stella Biderman},
+  title        = {Bergson: Mapping out the "memory" of neural nets with data attribution},
+  year         = {2026},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.18906967},
+  url          = {https://doi.org/10.5281/zenodo.18906967}
+}
+```
 
 # Support
 
