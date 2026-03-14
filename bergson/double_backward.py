@@ -15,7 +15,6 @@ from torchopt.pytree import tree_iter
 from torchopt.typing import Numeric
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson.chunk_and_tokenize import chunk_and_tokenize
 from bergson.config import DataConfig, DistributedConfig
 from bergson.data import load_data_string
 from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp
@@ -151,23 +150,8 @@ def worker(
             gradient_checkpointing_kwargs=dict(use_reentrant=False),
         )
 
-    tokenizer = AutoTokenizer.from_pretrained(run_cfg.model)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    if run_cfg.data.chunked:
-        train_dataset = chunk_and_tokenize(
-            train_dataset, tokenizer, max_seq_len=run_cfg.max_length
-        )
-
-    if run_cfg.query.chunked:
-        query_dataset = chunk_and_tokenize(
-            query_dataset, tokenizer, max_seq_len=run_cfg.max_length
-        )
-        query_processor = None
-    else:
-        query_processor = tokenizer
-
-    processor = None if run_cfg.data.chunked else tokenizer
+    processor = AutoTokenizer.from_pretrained(run_cfg.model)
+    processor.pad_token = processor.eos_token
 
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
@@ -223,7 +207,7 @@ def worker(
     # Compute query gradients
     query_stream = DataStream(
         query_dataset,
-        query_processor,
+        processor,
         batch_size=run_cfg.batch_size,
         num_batches=run_cfg.query_batches,
         device=f"cuda:{rank}",
