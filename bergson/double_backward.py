@@ -37,7 +37,7 @@ class DoubleBackwardConfig:
     data: DataConfig = field(default_factory=DataConfig)
     """Training dataset."""
 
-    query: DataConfig = field(default_factory=lambda: DataConfig())
+    query: DataConfig = field(default_factory=DataConfig)
     """Query/eval dataset for computing attribution target gradients.
     If not specified, defaults to the training dataset."""
 
@@ -140,9 +140,7 @@ def worker(
     model.loss_function = weighted_causal_lm_ce
 
     if run_cfg.untie_weights and hasattr(model, "lm_head"):
-        model.lm_head.weight = torch.nn.Parameter(
-            model.lm_head.weight.data.clone()
-        )
+        model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.data.clone())
 
     model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
     if run_cfg.grad_checkpointing:
@@ -273,23 +271,12 @@ def worker(
 
     for subset in subsets:
         fwd_state.load(path0)
-        fresh_opt = torchopt.adamw(
-            schedule,
-            betas=(0.95, 0.975),
-            eps_root=run_cfg.eps_root,
-        )
-        lds_trainer = Trainer(model, fresh_opt)
-        fwd_state = TrainerState(
-            fwd_state.params,
-            fresh_opt.init(fwd_state.params),
-            fwd_state.buffers,
-        )
 
         stream.weights.fill_(1.0)
         stream.weights[subset] = 0.0
 
         for x in stream:
-            fwd_state = lds_trainer.step(fwd_state, x)
+            fwd_state = trainer.step(fwd_state, x)
 
         with fwd_state.activate(model):
             eval_batch = query_stream[0]

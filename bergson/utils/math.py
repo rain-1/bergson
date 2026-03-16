@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-# @torch.compile
 def weighted_causal_lm_ce(
     logits: Tensor,
     labels: Tensor,

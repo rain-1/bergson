@@ -13,7 +13,7 @@ import torch.distributed.checkpoint as dcp
 import torchopt
 from datasets import Dataset
 from torch import nn
-from torchopt.pytree import tree_iter, tree_map
+from torchopt.pytree import tree_flatten_with_path, tree_iter, tree_map
 from torchopt.typing import GradientTransformation, OptState
 from tqdm.auto import tqdm
 
@@ -240,7 +240,18 @@ class TrainerState:
 
     def state_dict(self) -> dict:
         # Convert to dict manually because dataclasses.asdict does a deep copy
-        return {f.name: getattr(self, f.name) for f in fields(self)}
+        state = {f.name: getattr(self, f.name) for f in fields(self)}
+        OPT_KEY = "opt_state"
+
+        # Flatten opt_state PyTree into the top-level dict with "opt_state/" prefix so
+        # that it can be saved with DCP, which doesn't support nested structures.
+        opt_state = state.pop(OPT_KEY)
+        paths, elements, _ = tree_flatten_with_path(opt_state)
+        str_paths = [OPT_KEY + "/" + ".".join(map(str, p)) for p in paths]
+        opt_state = dict(zip(str_paths, elements))
+        state.update(opt_state)
+
+        return state
 
 
 class Trainer:
