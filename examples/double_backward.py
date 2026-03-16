@@ -48,7 +48,7 @@ class RunConfig:
     max_length: int = 256
     """Maximum token sequence length."""
 
-    save_dir: str = "/mnt/ssd-3/nora/magic-ckpts"
+    save_dir: str = "/mnt/ssd-1/nora/magic-ckpts"
     """Directory to save forward pass checkpoints."""
 
     num_subsets: int = 100
@@ -167,9 +167,10 @@ def worker(global_rank: int, rank: int, world_size: int, dataset, run_cfg: RunCo
     subsets = perm.chunk(run_cfg.num_subsets)
 
     save_fut.result()  # ensure state0 is saved before loading in loop
-    fwd_state.load(path0)
 
     for subset in subsets:
+        fwd_state.load(path0)
+
         stream.weights.fill_(1.0)
         stream.weights[subset] = 0.0
 

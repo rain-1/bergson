@@ -37,7 +37,7 @@ class DoubleBackwardConfig:
     data: DataConfig = field(default_factory=DataConfig)
     """Training dataset."""
 
-    query: DataConfig = field(default_factory=lambda: DataConfig())
+    query: DataConfig = field(default_factory=DataConfig)
     """Query/eval dataset for computing attribution target gradients.
     If not specified, defaults to the training dataset."""
 
