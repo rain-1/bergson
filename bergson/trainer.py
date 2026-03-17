@@ -309,14 +309,7 @@ class Trainer:
 
         # Trainable params live on the meta device and are swapped in from state.
         # Frozen params remain on-device in the model and are left untouched.
-        with (
-            torch.autocast(
-                "cuda",
-                dtype=torch.bfloat16,
-                enabled=torch.cuda.is_bf16_supported(),
-            ),
-            swap_parameters(self.model, state.params, state.buffers) as params,
-        ):
+        with swap_parameters(self.model, state.params, state.buffers) as params:
             outputs = self.model(**inputs)
 
             # Currently we support two output types: HuggingFace, and "raw loss"

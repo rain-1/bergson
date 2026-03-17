@@ -82,35 +82,27 @@ class ReplicateComputation(torch.nn.Module):
 
 
 def shallow_copy(tensor_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Create a shallow copy of a dict of tensors, handling tied weights."""
-    # For each unique tensor, construct a list of the places in the model where it
-    # appears. This is a bit wonky, but it is the best way to handle tied weights.
-    tensor_to_paths = defaultdict(list)
-    for path, param in tensor_dict.items():
-        tensor_to_paths[param].append(path)
+    """Create a shallow copy of a dict of tensors, handling tied weights.
 
-    # We reverse the list of paths so that when we pop from the front, we get the
-    # same order as the original dict. This is important for tied weights, since we
-    # want to make sure that all occurrences of a tied weight point to the same
-    # copied tensor.
-    tensor_to_paths = list(tensor_to_paths.items())
-    tensor_to_paths.reverse()
+    Preserves the original key order. All paths that shared the same tensor
+    (tied weights) will point to the same copied tensor in the output.
+    """
+    seen: dict[int, torch.Tensor] = {}  # id(original) -> copied tensor
+    result: dict[str, torch.Tensor] = {}
 
-    # Use a while loop to avoid modifying the dict while iterating over it. We don't
-    # want to hold onto both the original and copied versions of each parameter.
-    tensor_dict = {}
-    while tensor_to_paths:
-        t, paths = tensor_to_paths.pop()
+    for path, t in tensor_dict.items():
+        tid = id(t)
+        if tid not in seen:
+            if isinstance(t, DTensor):
+                t2 = DTensor.from_local(t.to_local(), t.device_mesh, t.placements)
+            else:
+                t2 = torch.Tensor(t.data)
+            t2.requires_grad_(t.requires_grad)
+            seen[tid] = t2
 
-        if isinstance(t, DTensor):
-            t2 = DTensor.from_local(t.to_local(), t.device_mesh, t.placements)
-        else:
-            t2 = torch.Tensor(t.data)
+        result[path] = seen[tid]
 
-        t2.requires_grad_(t.requires_grad)
-        tensor_dict[paths[0]] = t2
-
-    return tensor_dict
+    return result
 
 
 def simple_fsdp(model: torch.nn.Module) -> torch.nn.Module:

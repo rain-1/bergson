@@ -78,11 +78,6 @@ class DoubleBackwardConfig:
     """Epsilon root for AdamW optimizer. Use 1e-2 for better stability
     with small models."""
 
-    untie_weights: bool = False
-    """Untie the lm_head weights from the embedding weights by cloning.
-    Required for models with tied weights (e.g. GPT-2) to avoid errors
-    during double backward."""
-
 
 def compute_query_gradients(
     trainer: Trainer,
@@ -138,11 +133,8 @@ def worker(
         attn_implementation="eager",
     )
     model.loss_function = weighted_causal_lm_ce
-
-    if run_cfg.untie_weights and hasattr(model, "lm_head"):
-        model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.data.clone())
-
     model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
+
     if run_cfg.grad_checkpointing:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs=dict(use_reentrant=False),
