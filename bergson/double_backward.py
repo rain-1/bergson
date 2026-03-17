@@ -8,11 +8,12 @@ from typing import Literal
 import torch
 import torch.distributed as dist
 import torchopt
-from scipy.stats import spearmanr
+from scipy.stats import describe, spearmanr
 from simple_parsing import ArgumentParser, field
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from torchopt.typing import Numeric
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from bergson.config import DataConfig, DistributedConfig
@@ -226,12 +227,14 @@ def worker(
 
     # Compute baseline eval loss for validation
     with fwd_state.activate(model):
-        baseline_batch = query_stream[0]
-        del baseline_batch["example_weight"]
-        baseline_loss = model(**baseline_batch).loss
+        baseline = torch.tensor(0.0, device=stream.weights.device)
+        for batch in query_stream:
+            del batch["example_weight"]
+
+            baseline += model(**batch).loss.detach() / len(query_stream)
 
     if world_size > 1:
-        dist.all_reduce(baseline_loss, op=dist.ReduceOp.AVG)
+        dist.all_reduce(baseline, op=dist.ReduceOp.AVG)
 
     bwd_state = trainer.backward(
         ckpts_path,
@@ -243,11 +246,12 @@ def worker(
     if world_size > 1:
         dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.AVG)
 
-    baseline = baseline_loss.item()
+    baseline = baseline.item()
     if global_rank == 0:
-        print(f"Scores: {bwd_state.weight_grads.tolist()}")
-        print(f"Baseline: {baseline}")
-        print(f"Grad sum: {bwd_state.weight_grads.sum()}")
+        print(f"Baseline loss: {baseline}")
+
+        summ = describe(bwd_state.weight_grads.cpu())
+        print(f"Score summary: {summ}")
 
     stream.requires_grad = False
 
@@ -259,9 +263,10 @@ def worker(
     perm = torch.randperm(len(stream.weights), generator=gen)
     subsets = perm.chunk(run_cfg.num_subsets)
 
+    pbar = tqdm(subsets, desc="Validating", disable=global_rank != 0)
     save_fut.result()  # ensure state0 is saved before loading in loop
 
-    for subset in subsets:
+    for subset in pbar:
         fwd_state.load(path0)
 
         stream.weights.fill_(1.0)
@@ -271,9 +276,11 @@ def worker(
             fwd_state = trainer.step(fwd_state, x)
 
         with fwd_state.activate(model):
-            eval_batch = query_stream[0]
-            del eval_batch["example_weight"]
-            loss = model(**eval_batch).loss
+            loss = torch.tensor(0.0, device=stream.weights.device)
+            for batch in query_stream:
+                del batch["example_weight"]
+
+                loss += model(**batch).loss.detach() / len(query_stream)
 
         if world_size > 1:
             dist.all_reduce(loss, op=dist.ReduceOp.AVG)
@@ -283,9 +290,11 @@ def worker(
 
         corr = spearmanr(diffs, score_sums)
         if global_rank == 0:
-            print(f"Loss diff: {diffs[-1]}")
-            print(f"Score: {score_sums[-1]}")
-            print(f"Spearman correlation: {corr}")
+            pbar.set_postfix({"rho": corr.statistic})
+
+    if global_rank == 0:
+        corr = spearmanr(diffs, score_sums)
+        print(f"Final Spearman correlation: {corr.statistic:.4f} (p={corr.pvalue:.2e})")
 
 
 def double_backward(run_cfg: DoubleBackwardConfig, dist_cfg: DistributedConfig):
