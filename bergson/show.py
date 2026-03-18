@@ -10,10 +10,12 @@ Usage
     bergson show runs/my_trackstar/scores --top_k 20
     bergson show runs/my_trackstar/scores --bottom_k 5  # most *negative* scores
     bergson show runs/my_trackstar/scores --query_idx 3  # scores for one query
+    bergson show runs/my_trackstar/scores --output results.jsonl  # write to JSONL
     bergson show runs/my_trackstar/scores --text_column custom_col  # override display column
 """
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +90,11 @@ class ShowConfig:
     inferred from the saved index config (conversation_column >
     prompt+completion_column > prompt_column)."""
 
+    output: str = ""
+    """If set, write results as JSONL to this file path instead of printing
+    to stdout. Each line contains the full training document row plus
+    'rank', 'idx', and 'score' fields."""
+
     dataset: str = ""
     """Override the training dataset path. By default it is read from
     the index_config.json saved alongside the scores."""
@@ -161,23 +168,54 @@ def show(cfg: ShowConfig) -> None:
     train_ds = load_data_string(dataset_str, split)
     assert isinstance(train_ds, Dataset), "Streaming datasets are not supported here."
 
+    top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
+    bottom_indices = agg_scores.argsort()[: cfg.bottom_k] if cfg.bottom_k > 0 else np.array([], dtype=int)
+
+    combined = list(enumerate(top_indices, 1)) + [
+        (-(cfg.bottom_k - i), idx) for i, idx in enumerate(bottom_indices)
+    ]
+
+    # --- 4a. JSONL output ---------------------------------------------------
+    if cfg.output:
+        out_path = Path(cfg.output)
+        with out_path.open("w") as f:
+            for section, indices in [
+                ("top", top_indices),
+                ("bottom", bottom_indices),
+            ]:
+                for rank, idx in enumerate(indices, 1):
+                    idx = int(idx)
+                    row = dict(train_ds[idx])  # full document row
+
+                    # Serialize any non-JSON-native values (e.g. lists of dicts are fine)
+                    record = {
+                        "rank": rank,
+                        "section": section,
+                        "idx": idx,
+                        "score": float(agg_scores[idx]),
+                        **row,
+                    }
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        print(f"Wrote {len(top_indices) + len(bottom_indices)} records to {out_path}")
+        return
+
+    # --- 4b. Human-readable stdout output -----------------------------------
     def _print_section(title: str, indices: np.ndarray) -> None:
         print(f"{'='*60}")
         print(f" {title}")
         print(f"{'='*60}")
-        for rank, idx in enumerate(indices):
+        for rank, idx in enumerate(indices, 1):
             idx = int(idx)
             snippet = _render_row(train_ds[idx], text_column_override, data_cfg)
-            print(f"\n[{rank + 1}] idx={idx}  score={agg_scores[idx]:.4f}")
+            print(f"\n[{rank}] idx={idx}  score={agg_scores[idx]:.4f}")
             print(f"    {snippet}")
         print()
 
-    # --- 4. Print results ---------------------------------------------------
     top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
     _print_section(f"TOP {cfg.top_k} most influential training documents", top_indices)
 
     if cfg.bottom_k > 0:
-        bottom_indices = agg_scores.argsort()[: cfg.bottom_k]
         _print_section(
             f"BOTTOM {cfg.bottom_k} least influential (most negative) training documents",
             bottom_indices,
