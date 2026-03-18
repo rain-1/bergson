@@ -1,7 +1,8 @@
 """bergson show: Inspect attribution scores from a completed Trackstar run.
 
 Reads the index_config.json saved alongside the scores to automatically
-discover the training dataset, so you never have to manually re-specify it.
+discover the training dataset and column format, so you never have to
+manually re-specify them.
 
 Usage
 -----
@@ -9,7 +10,7 @@ Usage
     bergson show runs/my_trackstar/scores --top_k 20
     bergson show runs/my_trackstar/scores --bottom_k 5  # most *negative* scores
     bergson show runs/my_trackstar/scores --query_idx 3  # scores for one query
-    bergson show runs/my_trackstar/scores --text_column messages  # for chat datasets
+    bergson show runs/my_trackstar/scores --text_column custom_col  # override display column
 """
 
 import json
@@ -23,10 +24,37 @@ from simple_parsing import field
 from .data import load_data_string, load_scores
 
 
-def _first_text(row: dict, text_column: str) -> str:
-    """Return a short, readable snippet from a dataset row."""
-    val = row.get(text_column, "")
+def _render_row(row: dict, text_column: str | None, data_cfg: dict) -> str:
+    """Return a short, readable snippet from a dataset row.
 
+    If text_column is explicitly provided, use it. Otherwise infer the best
+    column(s) to display from the saved DataConfig.
+    """
+    if text_column is not None:
+        # Explicit override
+        val = row.get(text_column, f"(column '{text_column}' not found)")
+        return _render_value(val)
+
+    # Auto-detect from DataConfig
+    conversation_col = data_cfg.get("conversation_column", "")
+    completion_col = data_cfg.get("completion_column", "")
+    prompt_col = data_cfg.get("prompt_column", "text")
+
+    if conversation_col:
+        val = row.get(conversation_col, f"(column '{conversation_col}' not found)")
+        return _render_value(val)
+
+    if completion_col:
+        prompt = str(row.get(prompt_col, ""))[:120]
+        completion = str(row.get(completion_col, ""))[:120]
+        return f"[prompt] {prompt} | [completion] {completion}"
+
+    val = row.get(prompt_col, f"(column '{prompt_col}' not found)")
+    return _render_value(val)
+
+
+def _render_value(val) -> str:
+    """Render a column value as a human-readable string."""
     # Handle chat/conversation format: list of {"role": ..., "content": ...}
     if isinstance(val, list):
         parts = []
@@ -35,7 +63,6 @@ def _first_text(row: dict, text_column: str) -> str:
             content = str(msg.get("content", ""))[:120]
             parts.append(f"[{role}] {content}")
         return " | ".join(parts)
-
     return str(val)[:240]
 
 
@@ -56,42 +83,63 @@ class ShowConfig:
     """If >= 0, display scores for this specific query index only.
     Otherwise scores are aggregated across all queries (mean)."""
 
-    text_column: str = "text"
-    """Dataset column to display as the document preview.
-    Use 'messages' for chat-formatted datasets."""
+    text_column: str = ""
+    """Override which dataset column to display. By default, the column is
+    inferred from the saved index config (conversation_column >
+    prompt+completion_column > prompt_column)."""
 
     dataset: str = ""
     """Override the training dataset path. By default it is read from
     the index_config.json saved alongside the scores."""
 
-    split: str = "train"
-    """Dataset split to use when loading the training data."""
+    split: str = ""
+    """Override the dataset split. By default it is read from index_config.json."""
 
 
 def show(cfg: ShowConfig) -> None:
     scores_path = Path(cfg.scores_path)
+
     if not scores_path.exists():
         raise FileNotFoundError(f"Scores directory not found: {scores_path}")
 
-    # --- 1. Discover training dataset from saved metadata -------------------
-    dataset_str = cfg.dataset
-    split = cfg.split
-    if not dataset_str:
-        config_path = scores_path / "index_config.json"
-        if not config_path.exists():
+    # --- 1. Detect if user pointed at the parent trackstar run dir ----------
+    config_path = scores_path / "index_config.json"
+    if not config_path.exists():
+        scores_subdir = scores_path / "scores"
+        if (scores_subdir / "index_config.json").exists():
             raise FileNotFoundError(
-                f"index_config.json not found at {config_path}. "
-                "Either pass --dataset explicitly or point to the scores directory "
-                "produced by bergson trackstar."
+                f"index_config.json not found at {config_path}.\n\n"
+                f"It looks like you passed the top-level trackstar run directory.\n"
+                f"Did you mean:\n\n"
+                f"    bergson show {scores_subdir}\n\n"
+                f"Otherwise pass --dataset explicitly to specify your training data."
             )
+        if not cfg.dataset:
+            raise FileNotFoundError(
+                f"index_config.json not found at {config_path}.\n"
+                "Pass --dataset explicitly to specify your training data."
+            )
+
+    # --- 2. Load saved index config (for dataset path and column names) -----
+    index_cfg: dict = {}
+    if config_path.exists():
         with config_path.open() as f:
             index_cfg = json.load(f)
 
-        dataset_str = index_cfg["data"]["dataset"]
-        split = index_cfg["data"].get("split", "train")
-        print(f"Training dataset (from metadata): {dataset_str} (split={split})")
+    data_cfg: dict = index_cfg.get("data", {})
+    dataset_str = cfg.dataset or data_cfg.get("dataset", "")
+    split = cfg.split or data_cfg.get("split", "train")
 
-    # --- 2. Load scores and training data -----------------------------------
+    if not dataset_str:
+        raise ValueError(
+            "Could not determine training dataset path from metadata. "
+            "Pass --dataset explicitly."
+        )
+
+    print(f"Training dataset (from metadata): {dataset_str} (split={split})")
+    text_column_override = cfg.text_column if cfg.text_column else None
+
+    # --- 3. Load scores and training data -----------------------------------
     scores_obj = load_scores(scores_path)
     raw = scores_obj[:]  # shape: (num_train, num_queries)
 
@@ -119,12 +167,12 @@ def show(cfg: ShowConfig) -> None:
         print(f"{'='*60}")
         for rank, idx in enumerate(indices):
             idx = int(idx)
-            snippet = _first_text(train_ds[idx], cfg.text_column)
+            snippet = _render_row(train_ds[idx], text_column_override, data_cfg)
             print(f"\n[{rank + 1}] idx={idx}  score={agg_scores[idx]:.4f}")
-            print(f"    {snippet[:200]}")
+            print(f"    {snippet}")
         print()
 
-    # --- 3. Print results ---------------------------------------------------
+    # --- 4. Print results ---------------------------------------------------
     top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
     _print_section(f"TOP {cfg.top_k} most influential training documents", top_indices)
 
