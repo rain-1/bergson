@@ -35,6 +35,7 @@ dev = [
     # Generate documentation
     "furo",
     "myst-parser",
+    "scipy-stubs",
     "sphinx",
     "sphinx-autodoc-typehints",
     "sphinx-rtd-theme",

@@ -4,13 +4,13 @@ import math
 from multiprocessing import cpu_count
 from typing import TypeVar, Union
 
-import numpy as np
-import torch
 from datasets import Dataset, DatasetDict
-from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase
 
+from .utils import assert_type
+
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
+
 
 def tokenize_and_pad(raw_ds, tokenizer, max_seq_len):
     tokenizer.pad_token = tokenizer.eos_token  # GPT-2 has no pad token by default
@@ -64,7 +64,7 @@ def chunk_and_tokenize(
 
     def _tokenize_fn(x: dict[str, list]):
         chunk_size = min(tokenizer.model_max_length, max_seq_len)
-        sep = tokenizer.eos_token or "<|endoftext|>"
+        sep = assert_type(str, tokenizer.eos_token or "<|endoftext|>")
         joined_text = sep.join([""] + x[text_key])
         output = tokenizer(
             # Concatenate all the samples together, separated by the EOS token.
@@ -91,7 +91,8 @@ def chunk_and_tokenize(
             # number of tokens, and we don't want to pad, so we just drop it.
             output = {k: v[:-1] for k, v in output.items()}
 
-        output_batch_size = len(output["input_ids"])
+        tokens = assert_type(list, output["input_ids"])
+        output_batch_size = len(tokens)
 
         if output_batch_size == 0:
             raise ValueError(
@@ -102,7 +103,7 @@ def chunk_and_tokenize(
 
         return output
 
-    data = data.map(
+    data2 = data.map(
         _tokenize_fn,
         # Batching is important for ensuring that we don't waste tokens
         # since we always throw away the last element of the batch we
@@ -113,7 +114,11 @@ def chunk_and_tokenize(
         remove_columns=get_columns_all_equal(data),
         load_from_cache_file=load_from_cache_file,
     )
-    return data.with_format(format, columns=["input_ids"])
+    data2 = data2.with_format(format, columns=["input_ids"])
+
+    # Make sure HuggingFace hasn't changed the type of the dataset
+    assert isinstance(data2, type(data))
+    return data2
 
 
 def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:

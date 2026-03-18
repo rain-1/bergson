@@ -162,6 +162,14 @@ class TrainerState:
     cuda_rng_state: torch.Tensor = field(default_factory=_maybe_get_cuda_rng_state)
     cpu_rng_state: torch.Tensor = field(default_factory=torch.random.get_rng_state)
 
+    def to(self, device: torch.device | str) -> "TrainerState":
+        params = {k: p.to(device) for k, p in self.params.items()}
+        buffers = {k: b.to(device) for k, b in self.buffers.items()}
+        opt_state = tree_map(
+            lambda t: t.to(device) if isinstance(t, torch.Tensor) else t, self.opt_state
+        )
+        return TrainerState(params, opt_state, buffers, self.batch_index)
+
     def load(self, path: str):
         """Load state from a checkpoint file."""
         dcp.load(
@@ -309,7 +317,12 @@ class Trainer:
 
         # Trainable params live on the meta device and are swapped in from state.
         # Frozen params remain on-device in the model and are left untouched.
-        with swap_parameters(self.model, state.params, state.buffers) as params:
+        with swap_parameters(
+            self.model,
+            state.params,
+            state.buffers,
+            preserve_graph=trace,
+        ) as params:
             outputs = self.model(**inputs)
 
             # Currently we support two output types: HuggingFace, and "raw loss"
@@ -322,6 +335,10 @@ class Trainer:
 
             assert isinstance(loss, torch.Tensor), "Loss must be a Tensor"
             grads = grad_tree(loss, params, create_graph=trace)
+
+        if dist.is_initialized():
+            for v in grads.values():
+                dist.all_reduce(v)
 
         updates, new_state = self.optimizer.update(
             grads, state.opt_state, inplace=inplace, params=state.params
@@ -354,8 +371,8 @@ class Trainer:
 
         pending_fut: Future | None = None
 
-        main = not dist.is_initialized() or dist.get_rank() != 0
-        pbar = tqdm(data, desc="Training", disable=main)
+        main = not dist.is_initialized() or dist.get_rank() == 0
+        pbar = tqdm(data, desc="Training", disable=not main)
 
         for i, x in enumerate(pbar):
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
@@ -390,6 +407,15 @@ class Trainer:
         ckpt_list = sorted_checkpoints(ckpt_dir)
         expected_idx, _ = ckpt_list[-1]
 
+        main = not dist.is_initialized() or dist.get_rank() == 0
+        main_pbar = tqdm(
+            desc="Backward",
+            total=expected_idx + 1,
+            disable=not main,
+            position=0,
+        )
+        sub_pbar = None
+
         save_futures: list[Future] = []
         while ckpt_list:
             # Make sure everything has been saved
@@ -415,6 +441,15 @@ class Trainer:
 
             # Step forward in training if needed
             while idx < expected_idx:
+                if sub_pbar is None:
+                    sub_pbar = tqdm(
+                        total=expected_idx - idx,
+                        desc=f"Replaying to {expected_idx}",
+                        disable=not main,
+                        leave=False,
+                        position=1,
+                    )
+
                 fwd_state = self.step(
                     fwd_state,
                     data[fwd_state.batch_index],
@@ -422,6 +457,7 @@ class Trainer:
                     trace=False,
                 )
                 idx += 1
+                sub_pbar.update()
 
                 # Save checkpoints for states we will need later
                 if idx < expected_idx:
@@ -430,6 +466,10 @@ class Trainer:
 
                     fut = fwd_state.save(path)
                     save_futures.append(fut)
+
+            if sub_pbar is not None:
+                sub_pbar.close()
+                sub_pbar = None
 
             # The index we expect on the next iteration is one less than the current
             expected_idx = idx - 1
@@ -446,6 +486,8 @@ class Trainer:
                 data[fwd_state.batch_index],
                 trace=True,
             )
+            main_pbar.update()
+
             # Carefully consume the bwd state to save memory
             flat_f = state_f.differentiable_tensors()
             p_grads = list(bwd_state.param_grads.values())
@@ -479,4 +521,5 @@ class Trainer:
         for fut in save_futures:
             fut.result()
 
+        main_pbar.close()
         return bwd_state

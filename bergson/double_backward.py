@@ -75,13 +75,18 @@ class DoubleBackwardConfig:
     seed: int = 42
     """Random seed for subset permutation."""
 
+    beta1: float = 0.95
+    """Beta1 for AdamW optimizer."""
+
+    beta2: float = 0.975
+    """Beta2 for AdamW optimizer."""
+
     eps_root: float = 1e-8
     """Epsilon root for AdamW optimizer. Use 1e-2 for better stability
     with small models."""
 
 
 def compute_query_gradients(
-    trainer: Trainer,
     fwd_state: TrainerState,
     model: torch.nn.Module,
     query_stream: DataStream,
@@ -170,7 +175,7 @@ def worker(
 
     opt = torchopt.adamw(
         schedule,
-        betas=(0.95, 0.975),
+        betas=(run_cfg.beta1, run_cfg.beta2),
         eps_root=run_cfg.eps_root,
     )
     trainer, fwd_state = Trainer.initialize(model, opt)
@@ -207,7 +212,7 @@ def worker(
     )
 
     query_grads = compute_query_gradients(
-        trainer, fwd_state, model, query_stream, run_cfg.query_method
+        fwd_state, model, query_stream, run_cfg.query_method
     )
 
     if world_size > 1:
@@ -244,14 +249,19 @@ def worker(
         inplace=True,
     )
     if world_size > 1:
-        dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.AVG)
+        dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.SUM)
 
     baseline = baseline.item()
+    scores = bwd_state.weight_grads.cpu()
     if global_rank == 0:
         print(f"Baseline loss: {baseline}")
 
-        summ = describe(bwd_state.weight_grads.cpu())
+        summ = describe(scores)
         print(f"Score summary: {summ}")
+
+        score_path = os.path.join(run_cfg.run_path, "scores.pt")
+        torch.save(scores, score_path)
+        print(f"Saved attribution scores to {score_path}")
 
     stream.requires_grad = False
 
@@ -286,7 +296,7 @@ def worker(
             dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
         diffs.append(baseline - loss.item())
-        score_sums.append(bwd_state.weight_grads[subset].sum().item())
+        score_sums.append(scores[subset].sum().item())
 
         corr = spearmanr(diffs, score_sums)
         if global_rank == 0:
