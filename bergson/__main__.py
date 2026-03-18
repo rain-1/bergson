@@ -132,12 +132,6 @@ class Trackstar:
     trackstar_cfg: TrackstarConfig
 
     def execute(self):
-        if self.index_cfg.normalizer != "none":
-            print(
-                "Warning: using a normalizer. We have been unable to validate"
-                "normalizers in our ablations. Use at your own risk. "
-            )
-
         trackstar(
             self.index_cfg, self.score_cfg, self.preprocess_cfg, self.trackstar_cfg
         )
