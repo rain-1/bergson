@@ -16,15 +16,12 @@ Usage:
         --query.split "train[:1]"
 """
 
-from datasets import load_dataset
-
 from bergson.config import DataConfig, DistributedConfig
-from bergson.distributed import dist_main, worker
-from bergson.double_backward import DoubleBackwardConfig, double_backward
+from bergson.magic import MagicConfig, run_magic
 
 
 def main():
-    run_cfg = DoubleBackwardConfig(
+    run_cfg = MagicConfig(
         run_path="runs/magic_pretrain",
         model="EleutherAI/pythia-160m",
         revision="step0",
@@ -40,25 +37,13 @@ def main():
         lr=1e-5,
         warmup_steps=10,
         batch_size=8,
-        num_batches=25,
+        num_steps=25,
         max_length=256,
         num_subsets=100,
         seed=42,
     )
     dist_cfg = DistributedConfig()
-    double_backward(run_cfg, dist_cfg)
-
-    experiment = False
-    if experiment:
-        MODEL_TYPE = "image"
-
-        if MODEL_TYPE == "image":
-            ds = load_dataset("cifar10", split="train")
-            dist_main(ds, worker)
-        else:
-            ds = load_dataset("EleutherAI/SmolLM2-135M-10B", split="train")
-
-        dist_main(ds, worker)
+    run_magic(run_cfg, dist_cfg)
 
 
 if __name__ == "__main__":

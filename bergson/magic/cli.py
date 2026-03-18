@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -16,23 +17,22 @@ from torchopt.typing import Numeric
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bergson.config import DataConfig, DistributedConfig
-from bergson.data import load_data_string
-from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp
-from bergson.magic import (
-    BackwardState,
-    DataStream,
-    Trainer,
-    TrainerState,
-    apply_dtensor_patch,
-)
-from bergson.utils.math import weighted_causal_lm_ce
+from ..config import DataConfig, DistributedConfig
+from ..data import load_data_string
+from ..distributed import grad_tree, launch_distributed_run, simple_fsdp
+from ..utils.math import weighted_causal_lm_ce
+from .data_stream import DataStream
+from .dtensor_patch import apply_dtensor_patch
+from .trainer import BackwardState, Trainer, TrainerState
 
 
 @dataclass
-class DoubleBackwardConfig:
+class MagicConfig:
     run_path: str = field(positional=True)
     """Directory to save checkpoints and results."""
+
+    overwrite: bool = False
+    """Whether to overwrite the run directory if it already exists."""
 
     model: str = "EleutherAI/pythia-160m"
     """HuggingFace model name."""
@@ -130,7 +130,7 @@ def worker(
     world_size: int,
     train_dataset,
     query_dataset,
-    run_cfg: DoubleBackwardConfig,
+    run_cfg: MagicConfig,
 ):
     torch.cuda.set_device(rank)
 
@@ -164,7 +164,6 @@ def worker(
             world_size=world_size,
         )
 
-    if world_size > 1:
         apply_dtensor_patch()
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
@@ -302,9 +301,17 @@ def worker(
         print(f"Final Spearman correlation: {corr.statistic:.4f} (p={corr.pvalue:.2e})")
 
 
-def double_backward(run_cfg: DoubleBackwardConfig, dist_cfg: DistributedConfig):
+def run_magic(run_cfg: MagicConfig, dist_cfg: DistributedConfig):
     run_path = Path(run_cfg.run_path)
-    run_path.mkdir(parents=True, exist_ok=True)
+    if run_path.exists():
+        if run_cfg.overwrite:
+            shutil.rmtree(run_path)
+        else:
+            raise FileExistsError(
+                f"Run path {run_path} already exists. Use --overwrite to overwrite it."
+            )
+
+    run_path.mkdir(parents=True)
     with (run_path / "run_config.json").open("w") as f:
         json.dump(asdict(run_cfg), f, indent=2)
     with (run_path / "dist_config.json").open("w") as f:
@@ -324,21 +331,19 @@ def double_backward(run_cfg: DoubleBackwardConfig, dist_cfg: DistributedConfig):
         run_cfg.query.data_args,
     )
 
-    launch_distributed_run(
-        "double_backward", worker, [train_ds, query_ds, run_cfg], dist_cfg
-    )
+    launch_distributed_run("run_magic", worker, [train_ds, query_ds, run_cfg], dist_cfg)
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_arguments(DoubleBackwardConfig, dest="run_cfg")
+    parser.add_arguments(MagicConfig, dest="run_cfg")
     parser.add_arguments(DistributedConfig, dest="dist_cfg")
     args = parser.parse_args()
 
-    run_cfg: DoubleBackwardConfig = args.run_cfg
+    run_cfg: MagicConfig = args.run_cfg
     dist_cfg: DistributedConfig = args.dist_cfg
 
-    double_backward(run_cfg, dist_cfg)
+    run_magic(run_cfg, dist_cfg)
 
 
 if __name__ == "__main__":

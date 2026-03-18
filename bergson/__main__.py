@@ -13,8 +13,8 @@ from .config import (
     ScoreConfig,
     TrackstarConfig,
 )
-from .double_backward import DoubleBackwardConfig, double_backward
 from .hessians.hessian_approximations import approximate_hessians
+from .magic import MagicConfig, run_magic
 from .query.query_index import query
 from .score.score import score_dataset
 from .trackstar import trackstar
@@ -134,8 +134,8 @@ class Trackstar:
     def execute(self):
         if self.index_cfg.normalizer != "none":
             print(
-                "Warning: using a normalizer. We have been unable to validate normalizers"
-                "in our ablations. Use at your own risk. "
+                "Warning: using a normalizer. We have been unable to validate"
+                "normalizers in our ablations. Use at your own risk. "
             )
 
         trackstar(
@@ -147,12 +147,12 @@ class Trackstar:
 class Magic:
     """Run MAGIC attribution."""
 
-    run_cfg: DoubleBackwardConfig
+    run_cfg: MagicConfig
     dist_cfg: DistributedConfig
 
     def execute(self):
         """Run MAGIC attribution."""
-        double_backward(self.run_cfg, self.dist_cfg)
+        run_magic(self.run_cfg, self.dist_cfg)
 
 
 @dataclass

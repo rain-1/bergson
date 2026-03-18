@@ -351,7 +351,7 @@ class Trainer:
                 if sub_pbar is None:
                     sub_pbar = tqdm(
                         total=expected_idx - idx,
-                        desc=f"Replaying to {expected_idx}",
+                        desc=f"Rematerializing steps {idx} to {expected_idx}",
                         disable=not main,
                         leave=False,
                         position=1,

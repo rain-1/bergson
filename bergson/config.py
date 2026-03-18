@@ -182,7 +182,7 @@ class IndexConfig:
     label_smoothing: float = 0.0
     """Label smoothing coefficient for cross-entropy loss. When > 0, prevents
     near-zero gradients for high-confidence predictions that can cause numerical
-    instability. Recommended value: 0.005-0.01."""
+    instability."""
 
     stream_shard_size: int = 400_000
     """Shard size for streaming the dataset into Dataset objects."""
