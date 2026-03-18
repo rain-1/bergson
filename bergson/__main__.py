@@ -17,6 +17,7 @@ from .double_backward import DoubleBackwardConfig, double_backward
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .score.score import score_dataset
+from .show import ShowConfig, show
 from .trackstar import trackstar
 from .utils.worker_utils import validate_run_path
 
@@ -144,6 +145,17 @@ class Trackstar:
 
 
 @dataclass
+class Show:
+    """Inspect attribution scores from a completed Trackstar/score run."""
+
+    show_cfg: ShowConfig
+
+    def execute(self):
+        """Display top (and optionally bottom) scored training documents."""
+        show(self.show_cfg)
+
+
+@dataclass
 class Magic:
     """Run MAGIC attribution."""
 
@@ -160,7 +172,7 @@ class Main:
     """Routes to the subcommands."""
 
     command: Union[
-        Build, Query, Preconditioners, Reduce, Score, Hessian, Trackstar, Magic
+        Build, Query, Preconditioners, Reduce, Score, Hessian, Trackstar, Show, Magic
     ]
 
     def execute(self):
