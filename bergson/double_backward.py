@@ -65,8 +65,8 @@ class DoubleBackwardConfig:
     batch_size: int = 8
     """Per-device batch size."""
 
-    num_batches: int = 25
-    """Number of training batches."""
+    num_steps: int = 100
+    """Number of training steps."""
 
     max_length: int = 256
     """Maximum token sequence length."""
@@ -190,7 +190,7 @@ def worker(
         train_dataset,
         processor,
         batch_size=run_cfg.batch_size,
-        num_batches=run_cfg.num_batches,
+        num_batches=run_cfg.num_steps,
         device=f"cuda:{rank}",
         max_length=run_cfg.max_length,
         input_key=run_cfg.data.prompt_column,
@@ -216,13 +216,6 @@ def worker(
     query_grads = compute_query_gradients(
         fwd_state, model, query_stream, run_cfg.query_method
     )
-
-    if world_size > 1:
-        reduce_op = (
-            dist.ReduceOp.AVG if run_cfg.query_method == "mean" else dist.ReduceOp.SUM
-        )
-        for v in query_grads.values():
-            dist.all_reduce(v, op=reduce_op)
 
     stream.requires_grad = True
     opt_grads = [
