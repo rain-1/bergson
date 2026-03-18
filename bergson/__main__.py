@@ -132,10 +132,10 @@ class Trackstar:
     trackstar_cfg: TrackstarConfig
 
     def execute(self):
-        if self.index_cfg.normalizer != "adafactor":
+        if self.index_cfg.normalizer != "none":
             print(
-                "Warning: not using Adafactor normalizer. Pass --normalizer adafactor "
-                "to match the Trackstar paper."
+                "Warning: using a normalizer. We have been unable to validate normalizers"
+                "in our ablations. Use at your own risk. "
             )
 
         trackstar(
