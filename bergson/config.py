@@ -135,6 +135,12 @@ class IndexConfig:
     precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "fp32"
     """Precision (dtype) to use for the model parameters."""
 
+    use_tf32: bool = False
+    """Enable TF32 matmuls. Recommended for large FP32 runs."""
+
+    set_float32_matmul_precision_high: bool = False
+    """Set matmul precision to 'high'."""
+
     projection_dim: int = 16
     """Dimension of the random projection for the index, or 0 to disable it."""
 
@@ -157,8 +163,10 @@ class IndexConfig:
     processor_path: str = ""
     """Path to a precomputed processor."""
 
-    normalizer: Literal["adafactor", "adam", "none"] = "none"
-    """Type of normalizer to use for the gradients."""
+    normalizer: Literal["none"] = "none"  # "adafactor", "adam",
+    """Type of normalizer to use for the gradients. We are disabling
+    optimizers due to lack of empirical validation - contact Eleuther
+    if you'd like to use them."""
 
     skip_preconditioners: bool = False
     """Whether to skip estimating preconditioner statistics"""
@@ -240,6 +248,12 @@ class IndexConfig:
 
         if isinstance(self.distributed, dict):
             self.distributed = DistributedConfig(**self.distributed)
+
+        if self.use_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+
+        if self.set_float32_matmul_precision_high:
+            torch.set_float32_matmul_precision("high")
 
 
 @dataclass
