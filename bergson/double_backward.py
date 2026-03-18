@@ -19,8 +19,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from bergson.config import DataConfig, DistributedConfig
 from bergson.data import load_data_string
 from bergson.distributed import grad_tree, launch_distributed_run, simple_fsdp
-from bergson.magic_patch import apply_dtensor_patch
-from bergson.trainer import BackwardState, DataStream, Trainer, TrainerState
+from bergson.magic import (
+    BackwardState,
+    DataStream,
+    Trainer,
+    TrainerState,
+    apply_dtensor_patch,
+)
 from bergson.utils.math import weighted_causal_lm_ce
 
 
@@ -47,9 +52,6 @@ class DoubleBackwardConfig:
 
     query_batches: int = 1
     """Number of query batches to use for computing eval gradients."""
-
-    fsdp: bool = False
-    """Whether to use FSDP for multi-GPU training."""
 
     grad_checkpointing: bool = False
     """Whether to use gradient checkpointing during the forward pass."""
@@ -162,7 +164,7 @@ def worker(
             world_size=world_size,
         )
 
-    if run_cfg.fsdp and world_size > 1:
+    if world_size > 1:
         apply_dtensor_patch()
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:

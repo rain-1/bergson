@@ -85,7 +85,6 @@ def _patch_redistribute():
             current_spec,
             previous_spec,
             async_op=async_op,
-            is_backward=True,
         )
 
         if output.dtype != original_dtype:
