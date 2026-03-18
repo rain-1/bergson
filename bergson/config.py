@@ -135,6 +135,9 @@ class IndexConfig:
     precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "fp32"
     """Precision (dtype) to use for the model parameters."""
 
+    use_tf32: bool = False
+    "Enabled TF32 matmuls. Recommend for large FP32 runs."
+
     projection_dim: int = 16
     """Dimension of the random projection for the index, or 0 to disable it."""
 
@@ -240,6 +243,11 @@ class IndexConfig:
 
         if isinstance(self.distributed, dict):
             self.distributed = DistributedConfig(**self.distributed)
+
+        if self.use_tf32:
+            # TODO: benchmark "high" accuracy
+            # torch.set_float32_matmul_precision('high')
+            torch.backends.cuda.matmul.allow_tf32 = True
 
 
 @dataclass
