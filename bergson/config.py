@@ -279,6 +279,12 @@ class IndexConfig(AttributionConfig, Serializable):
     For example, "transformer.h.*.mlp.*" will exclude all MLP layers in a
     standard transformer architecture."""
 
+    force_math_sdp: bool = False
+    """Disable flash and memory-efficient SDPA backends, forcing the
+    math-only kernel. Some models produce inconsistent gradients across
+    different padding lengths when using optimized attention backends.
+    Run `bergson diagnose` to check whether your model needs this."""
+
     attribute_tokens: bool = False
     """Whether to compute per-token gradients instead of per-example.
     Incompatible with reduce mode."""

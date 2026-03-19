@@ -17,6 +17,7 @@ from .config import (
     ScoreConfig,
     TrackstarConfig,
 )
+from .diagnose import DiagnoseConfig, diagnose
 from .hessians.hessian_approximations import approximate_hessians
 from .magic import MagicConfig, run_magic
 from .query.query_index import query
@@ -177,6 +178,21 @@ class Trackstar:
 
 
 @dataclass
+class Test_Numerical_Stability:
+    """Test gradient consistency across padding and batch composition.
+
+    Tests whether a model produces consistent gradients regardless of how
+    documents are batched together. If inconsistencies are found, recommends
+    using --force_math_sdp on build/score/trackstar commands."""
+
+    diagnose_cfg: DiagnoseConfig
+
+    def execute(self):
+        """Run the diagnostic."""
+        diagnose(self.diagnose_cfg)
+
+
+@dataclass
 class Main:
     """Routes to the subcommands."""
 
@@ -190,6 +206,7 @@ class Main:
         Reduce,
         Score,
         Trackstar,
+        Test_Numerical_Stability,
     ]
 
     def execute(self):
