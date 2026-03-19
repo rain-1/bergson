@@ -186,6 +186,9 @@ def show(cfg: ShowConfig) -> None:
     train_ds = load_data_string(dataset_str, split)
     assert isinstance(train_ds, Dataset), "Streaming datasets are not supported here."
 
+    top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
+    bottom_indices = agg_scores.argsort()[: cfg.bottom_k] if cfg.bottom_k > 0 else np.array([], dtype=int)
+
     # --- 4a. JSONL output ---------------------------------------------------
     if cfg.output:
         out_path = Path(cfg.output)
@@ -223,7 +226,6 @@ def show(cfg: ShowConfig) -> None:
             print(f"    {snippet}")
         print()
 
-    top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
     _print_section(f"TOP {cfg.top_k} most influential training documents", top_indices)
 
     if cfg.bottom_k > 0:
