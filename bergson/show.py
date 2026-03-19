@@ -15,7 +15,6 @@ Usage
 """
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,30 +28,49 @@ from .data import load_data_string, load_scores
 def _render_row(row: dict, text_column: str | None, data_cfg: dict) -> str:
     """Return a short, readable snippet from a dataset row.
 
-    If text_column is explicitly provided, use it. Otherwise infer the best
-    column(s) to display from the saved DataConfig.
+    Resolution order:
+    1. Explicit --text_column override
+    2. Columns named in saved DataConfig metadata
+    3. Heuristic scan of actual row keys (handles prepare_dataset.py output)
+    4. Graceful message for pre-tokenized datasets
     """
     if text_column is not None:
-        # Explicit override
         val = row.get(text_column, f"(column '{text_column}' not found)")
         return _render_value(val)
 
-    # Auto-detect from DataConfig
+    # Auto-detect from DataConfig metadata
     conversation_col = data_cfg.get("conversation_column", "")
     completion_col = data_cfg.get("completion_column", "")
     prompt_col = data_cfg.get("prompt_column", "text")
 
-    if conversation_col:
-        val = row.get(conversation_col, f"(column '{conversation_col}' not found)")
-        return _render_value(val)
+    if conversation_col and conversation_col in row:
+        return _render_value(row[conversation_col])
 
-    if completion_col:
+    if completion_col and completion_col in row:
         prompt = str(row.get(prompt_col, ""))[:120]
         completion = str(row.get(completion_col, ""))[:120]
         return f"[prompt] {prompt} | [completion] {completion}"
 
-    val = row.get(prompt_col, f"(column '{prompt_col}' not found)")
-    return _render_value(val)
+    if prompt_col in row:
+        return _render_value(row[prompt_col])
+
+    # Heuristic fallback: scan actual row keys for known text column names
+    for col in ("messages", "conversation"):
+        if col in row:
+            return _render_value(row[col])
+
+    if "prompt" in row and "completion" in row:
+        return f"[prompt] {str(row['prompt'])[:120]} | [completion] {str(row['completion'])[:120]}"
+
+    for col in ("prompt", "text", "content", "input"):
+        if col in row:
+            return _render_value(row[col])
+
+    # Pre-tokenized dataset with no readable text
+    non_token_cols = [c for c in row if c not in ("input_ids", "attention_mask", "labels", "length")]
+    if non_token_cols:
+        return f"(no text column found; other available columns: {', '.join(non_token_cols[:5])})"
+    return "(pre-tokenized dataset — no text columns available; use --output to export full records)"
 
 
 def _render_value(val) -> str:
@@ -167,13 +185,6 @@ def show(cfg: ShowConfig) -> None:
 
     train_ds = load_data_string(dataset_str, split)
     assert isinstance(train_ds, Dataset), "Streaming datasets are not supported here."
-
-    top_indices = agg_scores.argsort()[::-1][: cfg.top_k]
-    bottom_indices = agg_scores.argsort()[: cfg.bottom_k] if cfg.bottom_k > 0 else np.array([], dtype=int)
-
-    combined = list(enumerate(top_indices, 1)) + [
-        (-(cfg.bottom_k - i), idx) for i, idx in enumerate(bottom_indices)
-    ]
 
     # --- 4a. JSONL output ---------------------------------------------------
     if cfg.output:
