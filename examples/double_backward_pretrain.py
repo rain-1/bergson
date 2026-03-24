@@ -16,7 +16,7 @@ Usage:
         --query.split "train[:1]"
 """
 
-from bergson.config import DataConfig, DistributedConfig
+from bergson.config import DataConfig, DistributedConfig, LRScheduleConfig
 from bergson.magic import MagicConfig, run_magic
 
 
@@ -33,8 +33,7 @@ def main():
             dataset="EleutherAI/SmolLM2-135M-10B",
             split="train[:1]",
         ),
-        lr=1e-5,
-        warmup_steps=10,
+        lr_schedule=LRScheduleConfig(lr=1e-5, warmup_steps=10),
         batch_size=8,
         num_subsets=100,
         seed=42,

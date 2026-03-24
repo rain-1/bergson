@@ -19,16 +19,14 @@ class DataStream:
         self.dataset = dataset
         self.device = torch.device(device)
         self.input_key = input_key
-
-        # Ceil division
-        n = len(dataset)
-        self.num_batches = (n + batch_size - 1) // batch_size
+        self.n = len(dataset)
+        self.num_batches = self.n // batch_size
 
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
 
         # If num_docs isn't provided, assume that each sequence contains one document
-        num_docs = num_docs or n
+        num_docs = num_docs or self.n
         self.weights = torch.nn.Parameter(torch.ones(num_docs, device=self.device))
 
     @property
@@ -45,7 +43,7 @@ class DataStream:
 
         rng = range(
             i * self.batch_size,
-            min((i + 1) * self.batch_size, len(self.dataset)),
+            (i + 1) * self.batch_size,
         )
         indices = list(rng)[self.rank :: self.world_size]
 

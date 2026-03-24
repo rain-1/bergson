@@ -137,17 +137,54 @@ class ModelConfig(ABC):
 
 
 @dataclass
+class LRScheduleConfig(Serializable):
+    """Learning rate schedule configuration."""
+
+    lr: float = 1e-5
+    """The peak learning rate."""
+
+    lr_scheduler_type: Literal[
+        "linear",
+        "cosine",
+        "cosine_with_restarts",
+        "polynomial",
+        "constant",
+        "constant_with_warmup",
+    ] = "linear"
+    """The learning rate scheduler type."""
+
+    lr_start: float = 0.0
+    """Initial learning rate at the beginning of warmup."""
+
+    lr_end: float = 0.0
+    """Final learning rate after decay (only available for polynomial)."""
+
+    warmup_steps: float = 0
+    """Number of warmup steps before applying base lr.
+    A value >= 1 is an exact step count; a value in [0, 1)
+    is interpreted as a fraction of total training steps."""
+
+    num_cycles: float = 0.5
+    """Number of cosine cycles (used by cosine and cosine_with_restarts).
+    Default 0.5 gives a single half-cosine decay."""
+
+    power: float = 1.0
+    """Exponent for polynomial decay."""
+
+
+@dataclass
 class TrainingConfig(ModelConfig, Serializable):
     """Configuration for the MAGIC trainer."""
 
-    lr: float = 1e-5
-    """Base learning rate after warmup."""
-
-    warmup_steps: int = 10
-    """Number of warmup steps before applying base lr."""
+    lr_schedule: LRScheduleConfig = field(default_factory=LRScheduleConfig)
+    """Learning rate schedule configuration."""
 
     batch_size: int = 16
-    """Batch size for both training and query streams. Adjust based on GPU memory."""
+    """Batch size for both training and query streams.
+    Adjust based on GPU memory."""
+
+    num_epochs: int = 1
+    """Number of full passes over the training data."""
 
     adam_beta1: float = 0.95
     """Beta1 for AdamW optimizer."""
