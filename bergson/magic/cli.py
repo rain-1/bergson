@@ -1,6 +1,6 @@
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
@@ -20,6 +20,7 @@ from transformers import PreTrainedModel
 from ..config import AttributionConfig, DataConfig, DistributedConfig, TrainingConfig
 from ..distributed import grad_tree, launch_distributed_run, simple_fsdp
 from ..utils import assert_type
+from ..utils.logging import wandb_log_fn
 from ..utils.math import weighted_causal_lm_ce
 from ..utils.worker_utils import (
     setup_data_pipeline,
@@ -48,6 +49,9 @@ class MagicConfig(AttributionConfig, TrainingConfig):
 
     seed: int = 42
     """Random seed for subset permutation."""
+
+    wandb_project: str = ""
+    """Weights & Biases project name. If set, logs training loss to W&B."""
 
     def __post_init__(self):
         assert not self.fsdp, "PyTorch FSDP is not currently supported for MAGIC."
@@ -170,6 +174,10 @@ def worker(
 
     ckpts_path = os.path.join(run_cfg.run_path, "checkpoints")
     path0 = os.path.join(ckpts_path, "state0.pt")
+    log_fn = None
+    if run_cfg.wandb_project and global_rank == 0:
+        log_fn = wandb_log_fn(run_cfg.wandb_project, config=asdict(run_cfg))
+
     save_fut = fwd_state.save(path0)
 
     stream = DataStream(
@@ -184,6 +192,7 @@ def worker(
         stream,
         inplace=True,
         save_dir=ckpts_path,
+        log_fn=log_fn,
     )
 
     # Compute query gradients
