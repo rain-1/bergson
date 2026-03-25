@@ -107,7 +107,7 @@ def _measure(model, short_ids, long_ids, device):
 
 
 def _run_trials(model, all_docs, n_trials, seed, threshold, device):
-    """Run n_trials gradient consistency checks.
+    """Run n_trials gradient consistency checks with different-length pairs.
 
     Returns (min_cos_sim, n_flagged, results).
     """
@@ -127,6 +127,42 @@ def _run_trials(model, all_docs, n_trials, seed, threshold, device):
                 "short_len": len(doc_a),
                 "long_len": len(doc_b),
                 "ratio": len(doc_b) / len(doc_a),
+                "cos_sim": cos_sim,
+                "loss_diff": loss_diff,
+            }
+        )
+
+    cos_sims = torch.tensor([r["cos_sim"] for r in results])
+    n_flagged = int((cos_sims < threshold).sum().item())
+    return cos_sims.min().item(), n_flagged, results
+
+
+def _run_equal_length_trials(
+    model, all_docs, n_trials, seed, threshold, device, tokenizer
+):
+    """Run n_trials with equal-length pairs (no padding).
+
+    Batches each document alongside random tokens of the same length.
+    This isolates whether divergence comes from padding or from batching itself.
+
+    Returns (min_cos_sim, n_flagged, results).
+    """
+    rng = random.Random(seed)
+    vocab_size = tokenizer.vocab_size
+    results = []
+
+    for trial in range(n_trials):
+        doc = all_docs[rng.randrange(len(all_docs))]
+        # Generate random tokens of the same length (no padding needed)
+        random_ids = [rng.randrange(vocab_size) for _ in range(len(doc))]
+
+        cos_sim, loss_diff = _measure(model, doc, random_ids, device)
+        results.append(
+            {
+                "trial": trial,
+                "short_len": len(doc),
+                "long_len": len(random_ids),
+                "ratio": 1.0,
                 "cos_sim": cos_sim,
                 "loss_diff": loss_diff,
             }
@@ -367,6 +403,35 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
         configs.append(("--precision fp32", torch.float32, False))
         configs.append(("--precision fp32 --force_math_sdp", torch.float32, True))
 
+    # ── Equal-length batch test (no padding) ────────────────────────────
+    # Run once with defaults to isolate whether divergence is from padding
+    # or from batching itself.
+    print(f"\n{'=' * 60}")
+    print("Testing: equal-length batching (no padding)")
+    print("=" * 60)
+
+    eq_model = AutoModelForCausalLM.from_pretrained(
+        diagnose_cfg.model,
+        torch_dtype=base_dtype,
+        attn_implementation="sdpa",
+        device_map={"": device},
+    )
+    eq_model.eval()
+
+    eq_min, eq_flagged, eq_results = _run_equal_length_trials(
+        eq_model,
+        all_docs,
+        diagnose_cfg.n_trials,
+        diagnose_cfg.seed,
+        diagnose_cfg.threshold,
+        device,
+        tokenizer,
+    )
+    _print_results(eq_results, diagnose_cfg.threshold)
+    del eq_model
+    torch.cuda.synchronize()
+
+    # ── Padding tests (escalating configurations) ─────────────────────
     config_results = {}  # label -> (n_flagged, min_cos_sim)
     passing_config = None
 
@@ -416,6 +481,9 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
 
     st_status = "PASS" if special_tokens_ok else "FAIL"
     print(f"  {st_status}  Special token check (chat template BOS/EOS)")
+
+    eq_status = "PASS" if eq_flagged == 0 else "FAIL"
+    print(f"  {eq_status}  Equal-length batching (min cos_sim={eq_min:.6f})")
 
     for label, (n_flagged, min_cos_sim) in config_results.items():
         status = "PASS" if n_flagged == 0 else "FAIL"
