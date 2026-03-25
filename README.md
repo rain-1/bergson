@@ -165,7 +165,7 @@ bergson build <output_path> --model <model_name> --dataset <dataset_name> --rewa
 
 ## Numerical Stability
 
-Some models produce inconsistent per-example gradients when sequences of different lengths are batched together. This is caused by optimized SDPA attention backends (flash, memory-efficient) computing slightly different results depending on the padding length.
+Some models produce inconsistent per-example gradients when batched together. This is caused by nondeterminism in optimized SDPA attention backends (flash, memory-efficient) — the diagnostic tests both padding-induced and equal-length batch divergence to pinpoint the source.
 
 Use the built-in diagnostic to check your model:
 
@@ -173,32 +173,37 @@ Use the built-in diagnostic to check your model:
 bergson test_model_configuration --model <model_name>
 ```
 
-This automatically tests escalating configurations and reports exactly which flags (if any) you need. If your model fails the default test, add the recommended flags to your `build`/`score`/`trackstar` commands:
+This automatically tests escalating configurations and reports exactly which flags (if any) you need:
 
 ```bash
+# If force_math_sdp alone is sufficient:
 bergson build <output_path> --model <model_name> --force_math_sdp
-# or if needed:
-bergson build <output_path> --model <model_name> --force_math_sdp --precision fp32
+# If fp32 with TF32 matmuls is sufficient (cheaper than full fp32):
+bergson build <output_path> --model <model_name> --precision fp32 --use_tf32_matmuls --force_math_sdp
+# If full fp32 precision is required:
+bergson build <output_path> --model <model_name> --precision fp32 --force_math_sdp
 ```
 
 ### Performance impact
 
-The overhead of `--force_math_sdp` and `--precision fp32` varies by model. Benchmarked on A100-80GB with 500 documents from pile-10k:
+Benchmarked on A100-80GB with 500 documents from pile-10k:
 
 | Model | Settings | Build time | vs bf16 baseline |
 |-------|----------|------------|------------------|
-| Pythia-160M | bf16 | 30.2s | — |
-| Pythia-160M | bf16 + `--force_math_sdp` | 30.4s | +0.8% |
-| Pythia-160M | fp32 | 35.6s | +17.9% |
-| Pythia-160M | fp32 + `--force_math_sdp` | 39.6s | +31.1% |
-| OLMo-2-1B | bf16 | 43.1s | — |
-| OLMo-2-1B | bf16 + `--force_math_sdp` | 53.6s | +24.5% |
-| OLMo-2-1B | fp32 | 132.8s | +208.1% |
-| OLMo-2-1B | fp32 + `--force_math_sdp` | 141.8s | +229.0% |
-| OLMo-2-7B | bf16 | 105.5s | — |
-| OLMo-2-7B | bf16 + `--force_math_sdp` | 151.1s | +43.2% |
-| OLMo-2-7B | fp32 | 569.2s | +439.5% |
-| OLMo-2-7B | fp32 + `--force_math_sdp` | 603.6s | +472.1% |
+| Pythia-160M | bf16 | 31.2s | — |
+| Pythia-160M | bf16 + `--force_math_sdp` | 31.0s | -0.7% |
+| Pythia-160M | fp32 + `--use_tf32_matmuls` | 26.6s | -14.7% |
+| Pythia-160M | fp32 + `--use_tf32_matmuls` + `--force_math_sdp` | 27.5s | -11.9% |
+| Pythia-160M | fp32 | 35.4s | +13.3% |
+| Pythia-160M | fp32 + `--force_math_sdp` | 40.6s | +29.9% |
+| OLMo-2-1B | bf16 | 45.5s | — |
+| OLMo-2-1B | bf16 + `--force_math_sdp` | 53.9s | +18.4% |
+| OLMo-2-1B | fp32 + `--use_tf32_matmuls` | 51.3s | +12.7% |
+| OLMo-2-1B | fp32 + `--use_tf32_matmuls` + `--force_math_sdp` | 54.0s | +18.8% |
+| OLMo-2-1B | fp32 | 131.8s | +189.8% |
+| OLMo-2-1B | fp32 + `--force_math_sdp` | 141.2s | +210.5% |
+
+`--use_tf32_matmuls` with fp32 precision is significantly cheaper than full fp32 and may be sufficient for many models.
 
 Not all models are affected — run `bergson test_model_configuration` before enabling these flags to avoid unnecessary overhead.
 

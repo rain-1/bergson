@@ -393,15 +393,27 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     base_dtype = DTYPE_MAP[base_precision]
 
     # Define configurations to test in order of escalation.
-    # Each is (label, dtype, force_math_sdp).
-    # We skip configs that would be redundant (e.g. if base is already fp32).
-    configs = [
-        (f"defaults (precision={base_precision})", base_dtype, False),
-        (f"--force_math_sdp (precision={base_precision})", base_dtype, True),
+    # Each is (label, dtype, force_math_sdp, tf32_matmuls).
+    # tf32_matmuls uses TF32 for fp32 matmuls — cheaper than full fp32 but
+    # more precise than bf16.
+    configs: list[tuple[str, torch.dtype, bool, bool]] = [
+        (f"defaults (precision={base_precision})", base_dtype, False, False),
+        (f"--force_math_sdp (precision={base_precision})", base_dtype, True, False),
     ]
     if base_precision != "fp32":
-        configs.append(("--precision fp32", torch.float32, False))
-        configs.append(("--precision fp32 --force_math_sdp", torch.float32, True))
+        configs.extend(
+            [
+                ("--precision fp32 --use_tf32_matmuls", torch.float32, False, True),
+                (
+                    "--precision fp32 --use_tf32_matmuls --force_math_sdp",
+                    torch.float32,
+                    True,
+                    True,
+                ),
+                ("--precision fp32", torch.float32, False, False),
+                ("--precision fp32 --force_math_sdp", torch.float32, True, False),
+            ]
+        )
 
     # ── Equal-length batch test (no padding) ────────────────────────────
     # Run once with defaults to isolate whether divergence is from padding
@@ -435,7 +447,7 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     config_results = {}  # label -> (n_flagged, min_cos_sim)
     passing_config = None
 
-    for label, dtype, force_math_sdp in configs:
+    for label, dtype, force_math_sdp, tf32_matmuls in configs:
         print(f"\n{'=' * 60}")
         print(f"Testing: {label}")
         print("=" * 60)
@@ -446,6 +458,9 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
         if force_math_sdp:
             torch.backends.cuda.enable_flash_sdp(False)
             torch.backends.cuda.enable_mem_efficient_sdp(False)
+
+        # Set matmul precision
+        torch.set_float32_matmul_precision("high" if tf32_matmuls else "highest")
 
         model = AutoModelForCausalLM.from_pretrained(
             diagnose_cfg.model,
@@ -504,12 +519,14 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
         print(f"  Minimum required: {passing_config}")
         # Build the recommended CLI flags
         flags = []
-        for label, dtype, force_math_sdp in configs:
+        for label, dtype, force_math_sdp, tf32_matmuls in configs:
             if label == passing_config:
                 if force_math_sdp:
                     flags.append("--force_math_sdp")
                 if dtype == torch.float32 and base_precision != "fp32":
                     flags.append("--precision fp32")
+                if tf32_matmuls:
+                    flags.append("--use_tf32_matmuls")
                 break
         if flags:
             flag_str = " ".join(flags)
