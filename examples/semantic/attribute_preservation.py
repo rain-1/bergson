@@ -830,7 +830,7 @@ def score_attribute_eval(
         eval_data_path = data_path / "eval.hf"
 
     if not eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
         # Use smaller token batch size for semantic eval (short Q&A samples)
         # to ensure enough batches for distributed workers
@@ -1254,7 +1254,7 @@ def score_attribute_eval_with_pca(
         eval_data_path = data_path / "eval.hf"
 
     if not eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
         token_batch_size = "500" if is_semantic else "6000"
 
         cmd = [
@@ -1841,7 +1841,7 @@ def score_majority_style_eval(
     print("Computing majority eval gradients...")
     majority_eval_grads_path = base_path / "eval_grads_majority"
     if not majority_eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
         cmd = [
             "bergson",

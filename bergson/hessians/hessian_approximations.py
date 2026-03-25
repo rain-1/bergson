@@ -63,8 +63,8 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
 
     # Save both configs
-    index_cfg.save_json(index_cfg.partial_run_path / "index_config.json")
-    hessian_cfg.save_json(index_cfg.partial_run_path / "hessian_config.json")
+    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
+    hessian_cfg.save_yaml(index_cfg.partial_run_path / "hessian_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

@@ -56,7 +56,7 @@ def query(
         Configuration describing the index path, HF model to load, and dataset field
         used to print the retrieved documents.
     """
-    index_cfg = IndexConfig.load_json(Path(query_cfg.index) / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(Path(query_cfg.index) / "index_config.yaml")
 
     if index_cfg.debug:
         setup_reproducibility()

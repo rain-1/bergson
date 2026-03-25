@@ -443,6 +443,12 @@ class TrackstarConfig:
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
 
+    index_cfg: IndexConfig = field(default_factory=IndexConfig)
+
+    preprocess_cfg: PreprocessConfig = field(default_factory=PreprocessConfig)
+
+    score_cfg: ScoreConfig = field(default_factory=ScoreConfig)
+
     target_downweight_components: int = 1000
     """Number of gradient components to downweight via automatic lambda
     selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is

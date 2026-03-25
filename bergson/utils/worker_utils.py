@@ -98,7 +98,7 @@ def create_processor(
     rank = cfg.distributed.rank
 
     processor_path = Path(cfg.processor_path)
-    if (processor_path / "processor_config.json").exists():
+    if (processor_path / "processor_config.yaml").exists():
         if local_rank == 0:
             print(f"Loading processor from '{cfg.processor_path}'")
 
@@ -311,7 +311,7 @@ def max_tokens_for_model(tokenizer, model_str: str, revision: str | None) -> int
     # max_position_embeddings, but some models (e.g. Pythia!) have a smaller
     # max_position_embeddings than model_max_length, so we need to check both.
     # Resolve the base model for config loading (PEFT adapters don't have
-    # a full config.json, so we need the base model path).
+    # a full config.yaml, so we need the base model path).
     try:
         peft_cfg = PeftConfig.from_pretrained(model_str)
         if peft_cfg.base_model_name_or_path:
