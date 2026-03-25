@@ -332,7 +332,7 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     print(f"Threshold: {diagnose_cfg.threshold}")
 
     # ── Special token check ──────────────────────────────────────────────
-    diagnose_special_tokens(diagnose_cfg.model)
+    special_tokens_ok = diagnose_special_tokens(diagnose_cfg.model)
 
     # Load and tokenize dataset
     print(f"\nLoading {diagnose_cfg.dataset}...")
@@ -413,6 +413,9 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     print(f"\n{'=' * 60}")
     print(f"Report for {diagnose_cfg.model}")
     print("=" * 60)
+
+    st_status = "PASS" if special_tokens_ok else "FAIL"
+    print(f"  {st_status}  Special token check (chat template BOS/EOS)")
 
     for label, (n_flagged, min_cos_sim) in config_results.items():
         status = "PASS" if n_flagged == 0 else "FAIL"
