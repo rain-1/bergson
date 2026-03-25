@@ -81,7 +81,8 @@ def run_build(
     print(f"\n{'=' * 60}")
     print(f"  Model: {model}")
     print(
-        f"  precision={precision}, force_math_sdp={force_math_sdp}, tf32={use_tf32_matmuls}"
+        f"  precision={precision}, force_math_sdp={force_math_sdp},"
+        f" tf32={use_tf32_matmuls}"
     )
     print(f"  Command: {' '.join(cmd)}")
     print("=" * 60)

@@ -394,23 +394,30 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
 
     # Define configurations to test in order of escalation.
     # Each is (label, dtype, force_math_sdp, tf32_matmuls).
-    # tf32_matmuls uses TF32 for fp32 matmuls — cheaper than full fp32 but
-    # more precise than bf16.
+    # Escalation order: try cheap fixes first (tf32, math_sdp), combine them,
+    # then fall back to full fp32 only if needed.
     configs: list[tuple[str, torch.dtype, bool, bool]] = [
         (f"defaults (precision={base_precision})", base_dtype, False, False),
-        (f"--force_math_sdp (precision={base_precision})", base_dtype, True, False),
     ]
     if base_precision != "fp32":
         configs.extend(
             [
+                # Cheap fixes first
                 ("--precision fp32 --use_tf32_matmuls", torch.float32, False, True),
+                (
+                    f"--force_math_sdp (precision={base_precision})",
+                    base_dtype,
+                    True,
+                    False,
+                ),
+                # Combine cheap fixes
                 (
                     "--precision fp32 --use_tf32_matmuls --force_math_sdp",
                     torch.float32,
                     True,
                     True,
                 ),
-                ("--precision fp32", torch.float32, False, False),
+                # Full fp32 as last resort
                 ("--precision fp32 --force_math_sdp", torch.float32, True, False),
             ]
         )
