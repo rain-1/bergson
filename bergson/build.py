@@ -136,8 +136,8 @@ def build(
         setup_reproducibility()
 
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-    index_cfg.save_json(index_cfg.partial_run_path / "index_config.json")
-    preprocess_cfg.save_json(index_cfg.partial_run_path / "preprocess_config.json")
+    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
+    preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

@@ -557,7 +557,7 @@ def score_asymmetric_eval(
         )
 
     if not eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
         _run_bergson_build(
             eval_grads_path,
@@ -908,7 +908,7 @@ def score_asymmetric_eval_with_pca_projection(
         )
 
     if not eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
         _run_bergson_build(
             eval_grads_path,
@@ -1224,7 +1224,7 @@ def score_majority_style_eval(
     print("Computing majority style eval gradients...")
     majority_eval_grads_path = base_path / "eval_grads_majority"
     if not majority_eval_grads_path.exists():
-        index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+        index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
         _run_bergson_build(
             majority_eval_grads_path,
@@ -1410,7 +1410,7 @@ def score_summed_eval(
     eval_minority_grads_path = base_path / "eval_grads"
     eval_majority_grads_path = base_path / "eval_grads_majority"
 
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
     # Build minority eval grads if needed
     if not eval_minority_grads_path.exists():
@@ -2448,7 +2448,7 @@ def score_summed_rewrites(
     shakespeare_grads_path = base_path / "eval_grads"  # minority = shakespeare
     pirate_grads_path = base_path / "eval_grads_pirate"
 
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
     # Build shakespeare eval grads if needed
     if not shakespeare_grads_path.exists():
@@ -2607,7 +2607,7 @@ def score_original_style_eval(
     # Build original style eval grads if needed
     original_grads_path = base_path / "eval_grads_original"
 
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
     if not original_grads_path.exists():
         print("Computing original style eval gradients...")
@@ -2782,7 +2782,7 @@ def _score_single_style_eval(
     train_grad_tensor = train_grad_tensor.cuda()
 
     # Build eval grads if needed
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
     if not grads_path.exists():
         print(f"Computing {style} style eval gradients...")

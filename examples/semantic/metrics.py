@@ -222,7 +222,7 @@ def compute_metrics(
     # Load metadata from HF dataset (fast)
     print("Loading metadata...")
     # Get dataset path from index config
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
     dataset_path = index_cfg.data.dataset or str(index_path / "data.hf")
     meta_ds = load_from_disk(dataset_path)
     if isinstance(meta_ds, DatasetDict):

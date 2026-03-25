@@ -256,7 +256,7 @@ def compute_scores_with_bergson(
         preconditioner_path = str(index_preconditioner_path)
 
     # Load index config to get model and dataset info
-    index_cfg = IndexConfig.load_json(index_path / "index_config.json")
+    index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
 
     # Get dataset and column info from config
     data_cfg = index_cfg.data

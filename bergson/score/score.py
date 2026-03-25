@@ -62,7 +62,7 @@ def get_query_grads(
         target_modules = metadata["dtype"]["names"]
         grad_sizes = metadata["grad_sizes"]
 
-    preprocess_path = Path(query_path / "preprocess_config.json")
+    preprocess_path = Path(query_path / "preprocess_config.yaml")
     if preprocess_path.exists():
         with open(preprocess_path, "r") as f:
             preprocess_data = json.load(f)
@@ -362,8 +362,8 @@ def score_dataset(
     """
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
 
-    index_cfg.save_json(index_cfg.partial_run_path / "index_config.json")
-    score_cfg.save_json(index_cfg.partial_run_path / "score_config.json")
+    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
+    score_cfg.save_yaml(index_cfg.partial_run_path / "score_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

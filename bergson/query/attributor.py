@@ -87,7 +87,7 @@ class Attributor:
             )
             faiss_path = index_path / faiss_index_name
 
-            if not (faiss_path / "config.json").exists():
+            if not (faiss_path / "config.yaml").exists():
                 FaissIndex.create_index(
                     index_path,
                     faiss_path,

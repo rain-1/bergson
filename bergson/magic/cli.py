@@ -16,7 +16,7 @@ from torchopt.pytree import tree_iter
 from torchopt.typing import Numeric
 from tqdm import tqdm
 
-from ..config import AttributionConfig, DataConfig, DistributedConfig, TrainingConfig
+from ..config import AttributionConfig, DataConfig, TrainingConfig
 from ..distributed import grad_tree, launch_distributed_run, simple_fsdp
 from ..utils.logging import wandb_log_fn
 from ..utils.worker_utils import (
@@ -272,7 +272,7 @@ def worker(
         print(f"Final Spearman correlation: {corr.statistic:.4f} (p={corr.pvalue:.2e})")
 
 
-def run_magic(run_cfg: MagicConfig, dist_cfg: DistributedConfig):
+def run_magic(run_cfg: MagicConfig):
     run_path = Path(run_cfg.run_path)
     if run_path.exists():
         if run_cfg.overwrite:
@@ -283,8 +283,7 @@ def run_magic(run_cfg: MagicConfig, dist_cfg: DistributedConfig):
             )
 
     run_path.mkdir(parents=True)
-    run_cfg.save_json(run_path / "run_config.json")
-    dist_cfg.save_json(run_path / "dist_config.json")
+    run_cfg.save_yaml(run_path / "run_config.yaml")
 
     train_ds, train_n = setup_data_pipeline(run_cfg)
     query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)
@@ -293,20 +292,17 @@ def run_magic(run_cfg: MagicConfig, dist_cfg: DistributedConfig):
         "run_magic",
         worker,
         [train_ds, query_ds, train_n, query_n, run_cfg],
-        dist_cfg,
+        run_cfg.distributed,
     )
 
 
 def main():
     parser = ArgumentParser()
     parser.add_arguments(MagicConfig, dest="run_cfg")
-    parser.add_arguments(DistributedConfig, dest="dist_cfg")
     args = parser.parse_args()
 
     run_cfg: MagicConfig = args.run_cfg
-    dist_cfg: DistributedConfig = args.dist_cfg
-
-    run_magic(run_cfg, dist_cfg)
+    run_magic(run_cfg)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
 import logging
+import os
+import sys
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Union, get_args
 
-from simple_parsing import ArgumentParser, ConflictResolution
+from simple_parsing import ArgumentParser, ConflictResolution, Serializable
 
 from bergson.hessians.pipeline import hessian_pipeline
 
 from .build import build
 from .config import (
-    DistributedConfig,
     HessianConfig,
     HessianPipelineConfig,
     IndexConfig,
@@ -29,7 +30,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @dataclass
-class Build:
+class Build(Serializable):
     """Build a gradient index."""
 
     index_cfg: IndexConfig
@@ -47,7 +48,7 @@ class Build:
 
 
 @dataclass
-class Ekfac:
+class Ekfac(Serializable):
     """Run the full EKFAC influence pipeline end-to-end."""
 
     index_cfg: IndexConfig
@@ -71,7 +72,7 @@ class Ekfac:
 
 
 @dataclass
-class Hessian:
+class Hessian(Serializable):
     """Approximate Hessian matrices using KFAC or EKFAC."""
 
     hessian_cfg: HessianConfig
@@ -84,44 +85,37 @@ class Hessian:
 
 
 @dataclass
-class Magic:
+class Magic(MagicConfig):
     """Run MAGIC attribution."""
-
-    run_cfg: MagicConfig
-    dist_cfg: DistributedConfig
 
     def execute(self):
         """Run MAGIC attribution."""
-        run_magic(self.run_cfg, self.dist_cfg)
+        run_magic(self)
 
 
 @dataclass
-class Preconditioners:
+class Preconditioners(IndexConfig):
     """Compute normalizers and preconditioners without gradient collection."""
-
-    index_cfg: IndexConfig
 
     def execute(self):
         """Compute normalizers and preconditioners."""
-        self.index_cfg.skip_index = True
-        self.index_cfg.skip_preconditioners = False
-        validate_run_path(self.index_cfg)
-        build(self.index_cfg, PreprocessConfig())
+        self.skip_index = True
+        self.skip_preconditioners = False
+        validate_run_path(self)
+        build(self, PreprocessConfig())
 
 
 @dataclass
-class Query:
+class Query(QueryConfig):
     """Query an existing gradient index."""
-
-    query_cfg: QueryConfig
 
     def execute(self):
         """Query an existing gradient index."""
-        query(self.query_cfg)
+        query(self)
 
 
 @dataclass
-class Reduce:
+class Reduce(Serializable):
     """Reduce a gradient index."""
 
     index_cfg: IndexConfig
@@ -138,7 +132,7 @@ class Reduce:
 
 
 @dataclass
-class Score:
+class Score(Serializable):
     """Score a dataset against an existing gradient index."""
 
     score_cfg: ScoreConfig
@@ -159,21 +153,11 @@ class Score:
 
 
 @dataclass
-class Trackstar:
+class Trackstar(TrackstarConfig):
     """Run preconditioners, build, and score as a single pipeline."""
 
-    index_cfg: IndexConfig
-
-    score_cfg: ScoreConfig
-
-    preprocess_cfg: PreprocessConfig
-
-    trackstar_cfg: TrackstarConfig
-
     def execute(self):
-        trackstar(
-            self.index_cfg, self.score_cfg, self.preprocess_cfg, self.trackstar_cfg
-        )
+        trackstar(self)
 
 
 @dataclass
@@ -197,11 +181,31 @@ class Main:
         self.command.execute()
 
 
-def main(args: Optional[list[str]] = None):
+def main():
     """Parse CLI arguments and dispatch to the selected subcommand."""
-    parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
-    parser.add_arguments(Main, dest="prog")
-    prog: Main = parser.parse_args(args=args).prog
+    # Check to see if the user is passing in a yaml or json config file directly
+    args = sys.argv[1:]
+    if len(args) == 2 and os.path.isfile(args[-1]):
+        cmd_str, config_path = args
+
+        args = get_args(Main.__dataclass_fields__["command"].type)
+        names = {cls.__name__.lower(): cls for cls in args}
+        try:
+            cmd_cls = names[cmd_str.lower()]
+        except KeyError:
+            print(f"Invalid command '{cmd_str}'. Valid commands are: {list(names)}")
+            sys.exit(1)
+
+        try:
+            prog = cmd_cls.load(config_path)
+        except RuntimeError as e:
+            print(f"Failed to load config file {config_path}: {e}")
+            sys.exit(1)
+    else:
+        parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
+        parser.add_arguments(Main, dest="prog")
+        prog: Main = parser.parse_args().prog
+
     prog.execute()
 
 
