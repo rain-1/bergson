@@ -149,7 +149,7 @@ def prepare_trainer(cfg: TrainingConfig, rank: int, world_size: int):
 
     opt = torchopt.adamw(
         schedule,
-        betas=(cfg.beta1, cfg.beta2),
+        betas=(cfg.adam_beta1, cfg.adam_beta2),
         eps_root=cfg.eps_root,
     )
     trainer, fwd_state = Trainer.initialize(model, opt)
@@ -186,6 +186,7 @@ def worker(
     fwd_state = trainer.train(
         fwd_state,
         stream,
+        debug=run_cfg.debug,
         inplace=True,
         save_dir=ckpts_path,
         save_mode=run_cfg.save_mode,

@@ -149,15 +149,14 @@ class TrainingConfig(ModelConfig, Serializable):
     batch_size: int = 16
     """Batch size for both training and query streams. Adjust based on GPU memory."""
 
-    beta1: float = 0.95
+    adam_beta1: float = 0.95
     """Beta1 for AdamW optimizer."""
 
-    beta2: float = 0.975
+    adam_beta2: float = 0.975
     """Beta2 for AdamW optimizer."""
 
     eps_root: float = 1e-8
-    """Epsilon root for AdamW optimizer. Use 1e-2 for better stability
-    with small models."""
+    """Epsilon root for AdamW optimizer."""
 
     grad_checkpointing: bool = False
     """Whether to use gradient checkpointing during the forward pass."""
@@ -186,6 +185,9 @@ class AttributionConfig(ModelConfig, ABC):
 
     use_tf32_matmuls: bool = False
     """Set matmul precision to 'high'."""
+
+    debug: bool = False
+    """Whether to enable debug mode with additional logging."""
 
     def __post_init__(self):
         if self.use_tf32_matmuls:
@@ -270,9 +272,6 @@ class IndexConfig(AttributionConfig, Serializable):
     profile: bool = False
     """Whether to enable profiling during gradient collection.
     If true, by default the first 4 steps will be profiled."""
-
-    debug: bool = False
-    """Whether to enable debug mode with additional logging."""
 
     filter_modules: str | None = None
     """If provided, a glob pattern to filter out modules from gradient collection.

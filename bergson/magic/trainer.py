@@ -1,5 +1,6 @@
 import math
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import contextmanager
@@ -32,6 +33,7 @@ def _maybe_get_cuda_rng_state() -> torch.Tensor:
     return torch.zeros(16, dtype=torch.uint8)
 
 
+@dataclass
 class SaveFuture:
     """Wraps a DCP async_save future, destroying the gloo process group in result().
 
@@ -41,15 +43,22 @@ class SaveFuture:
     save() call creating a new group, leaking gloo sockets.
     """
 
-    def __init__(self, fut: Future, grp: "dist.ProcessGroup | None"):
-        self._fut = fut
-        self._grp = grp
+    fut: Future
+    grp: dist.ProcessGroup | None
+    debug_name: str = ""
+
+    def __post_init__(self):
+        self._start = time.monotonic()
 
     def result(self):
-        result = self._fut.result()
-        if self._grp is not None:
-            dist.destroy_process_group(self._grp)
-            self._grp = None
+        result = self.fut.result()
+        if self.debug_name:
+            elapsed = time.monotonic() - self._start
+            print(f"Saved {self.debug_name} in {elapsed:.2f} seconds")
+
+        if self.grp is not None:
+            dist.destroy_process_group(self.grp)
+            self.grp = None
 
         return result
 
@@ -92,7 +101,7 @@ class TrainerState:
             checkpoint_id=path,
         )
 
-    def save(self, path: str) -> SaveFuture:
+    def save(self, path: str, debug: bool = False) -> SaveFuture:
         # Create a new process group so that we can overlap saves.
         if dist.is_initialized():
             grp = dist.new_group(backend="gloo", group_desc=path)
@@ -106,7 +115,7 @@ class TrainerState:
             process_group=grp,
         )
         assert isinstance(fut, Future)
-        return SaveFuture(fut, grp)
+        return SaveFuture(fut, grp, debug_name=path if debug else "")
 
     def detach_(self):
         for k, p in self.params.items():
@@ -264,6 +273,7 @@ class Trainer:
         state: TrainerState,
         data: DataStream,
         *,
+        debug: bool = False,
         inplace: bool = False,
         save_dir: str | None = None,
         save_mode: Literal["all", "sqrt"] = "sqrt",
@@ -293,7 +303,7 @@ class Trainer:
                     pending_save.result()
 
                 p = os.path.join(save_dir, f"step_{i}.ckpt")
-                pending_save = state.save(p)
+                pending_save = state.save(p, debug=debug)
 
             state = self.step(state, x, inplace=inplace, trace=trace)
 
