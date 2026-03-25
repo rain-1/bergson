@@ -154,11 +154,15 @@ class Score(Serializable):
 
 
 @dataclass
-class Trackstar(TrackstarConfig):
+class Trackstar(Serializable):
     """Run preconditioners, build, and score as a single pipeline."""
 
+    index_cfg: IndexConfig
+
+    trackstar_cfg: TrackstarConfig
+
     def execute(self):
-        trackstar(self)
+        trackstar(self.index_cfg, self.trackstar_cfg)
 
 
 @dataclass

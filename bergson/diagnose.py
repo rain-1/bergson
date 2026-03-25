@@ -397,7 +397,7 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     # Escalation order: try cheap fixes first (tf32, math_sdp), combine them,
     # then fall back to full fp32 only if needed.
     configs: list[tuple[str, torch.dtype, bool, bool]] = [
-        (f"defaults (precision={base_precision})", base_dtype, False, False),
+        (f"precision={base_precision}", base_dtype, False, False),
     ]
     if base_precision != "fp32":
         configs.extend(
@@ -499,6 +499,7 @@ def diagnose(diagnose_cfg: DiagnoseConfig):
     # Final report
     print(f"\n{'=' * 60}")
     print(f"Report for {diagnose_cfg.model}")
+    print(f"  {diagnose_cfg.n_trials} trials per configuration")
     print("=" * 60)
 
     st_status = "PASS" if special_tokens_ok else "FAIL"

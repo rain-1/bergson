@@ -450,8 +450,6 @@ class TrackstarConfig:
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
 
-    index_cfg: IndexConfig = field(default_factory=IndexConfig)
-
     preprocess_cfg: PreprocessConfig = field(default_factory=PreprocessConfig)
 
     score_cfg: ScoreConfig = field(default_factory=ScoreConfig)
