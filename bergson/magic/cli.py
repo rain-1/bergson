@@ -218,6 +218,7 @@ def worker(
         stream,
         bwd_state,
         fwd_state,
+        debug=run_cfg.debug,
         inplace=True,
     )
     if world_size > 1:

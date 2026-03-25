@@ -46,15 +46,16 @@ class SaveFuture:
     fut: Future
     grp: dist.ProcessGroup | None
     debug_name: str = ""
-
-    def __post_init__(self):
-        self._start = time.monotonic()
+    debug_pbar: RtlTqdm | tqdm | None = None
 
     def result(self):
+        start = time.monotonic()
         result = self.fut.result()
-        if self.debug_name:
-            elapsed = time.monotonic() - self._start
-            print(f"Saved {self.debug_name} in {elapsed:.2f} seconds")
+        elapsed = time.monotonic() - start
+
+        if self.debug_name and (not dist.is_initialized() or dist.get_rank() == 0):
+            print_fn = self.debug_pbar.write if self.debug_pbar else print
+            print_fn(f"Waiting for {self.debug_name} took {elapsed:.2f} seconds")
 
         if self.grp is not None:
             dist.destroy_process_group(self.grp)
@@ -101,7 +102,7 @@ class TrainerState:
             checkpoint_id=path,
         )
 
-    def save(self, path: str, debug: bool = False) -> SaveFuture:
+    def save(self, path: str, debug_pbar: RtlTqdm | tqdm | None = None) -> SaveFuture:
         # Create a new process group so that we can overlap saves.
         if dist.is_initialized():
             grp = dist.new_group(backend="gloo", group_desc=path)
@@ -115,7 +116,12 @@ class TrainerState:
             process_group=grp,
         )
         assert isinstance(fut, Future)
-        return SaveFuture(fut, grp, debug_name=path if debug else "")
+        return SaveFuture(
+            fut,
+            grp,
+            debug_name=path if debug_pbar is not None else "",
+            debug_pbar=debug_pbar,
+        )
 
     def detach_(self):
         for k, p in self.params.items():
@@ -303,7 +309,7 @@ class Trainer:
                     pending_save.result()
 
                 p = os.path.join(save_dir, f"step_{i}.ckpt")
-                pending_save = state.save(p, debug=debug)
+                pending_save = state.save(p, debug_pbar=pbar if debug else None)
 
             state = self.step(state, x, inplace=inplace, trace=trace)
 
@@ -323,6 +329,7 @@ class Trainer:
         fwd_state: TrainerState,
         *,
         cleanup: bool = True,
+        debug: bool = False,
         inplace: bool = False,
     ) -> BackwardState:
         ckpt_list = sorted_checkpoints(ckpt_dir)
@@ -349,7 +356,13 @@ class Trainer:
 
             idx, path = ckpt_list[-1]
             fwd_state.batch_index = idx
+
+            start = time.monotonic()
             fwd_state.load(path)
+            elapsed = time.monotonic() - start
+
+            if debug and main:
+                main_pbar.write(f"Loaded checkpoint {path} in {elapsed:.2f} seconds")
 
             # Detach after loading so that replay steps can use in-place ops
             # (loaded tensors may retain requires_grad from the previous traced step)
@@ -390,7 +403,9 @@ class Trainer:
                     path = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
                     ckpt_list.append((idx, path))
 
-                    save_futures.append(fwd_state.save(path))
+                    save_futures.append(
+                        fwd_state.save(path, debug_pbar=main_pbar if debug else None)
+                    )
 
             if sub_pbar is not None:
                 sub_pbar.close()

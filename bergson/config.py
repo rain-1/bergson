@@ -70,7 +70,7 @@ class DistributedConfig(Serializable):
     nnode: int = 1
     """The number of nodes to use for computation."""
 
-    nproc_per_node: int = field(default_factory=lambda: torch.cuda.device_count())
+    nproc_per_node: int = field(default_factory=torch.cuda.device_count)
     """The number of processes per node."""
 
     node_rank: int | None = None
