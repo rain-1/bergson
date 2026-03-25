@@ -266,7 +266,7 @@ class Trainer:
         *,
         inplace: bool = False,
         save_dir: str | None = None,
-        save_mode: Literal["linear", "sqrt"] = "sqrt",
+        save_mode: Literal["all", "sqrt"] = "sqrt",
         trace: bool = False,
         log_fn: Callable[[int, float], None] | None = None,
     ) -> TrainerState:
@@ -317,6 +317,7 @@ class Trainer:
     ) -> BackwardState:
         ckpt_list = sorted_checkpoints(ckpt_dir)
         expected_idx, _ = ckpt_list[-1]
+        last_idx = expected_idx
 
         main = not dist.is_initialized() or dist.get_rank() == 0
         main_pbar = RtlTqdm(
@@ -350,7 +351,7 @@ class Trainer:
                 del ckpt_list[-1]
 
                 # Only delete on the main rank
-                if cleanup and (not dist.is_initialized() or dist.get_rank() == 0):
+                if cleanup and main and idx != last_idx:
                     rmtree(path) if os.path.isdir(path) else os.remove(path)
 
             # Step forward in training if needed

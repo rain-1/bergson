@@ -41,6 +41,10 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     query_method: Literal["mean", "sum"] = "mean"
     """Method for reducing query gradients across batches."""
 
+    save_mode: Literal["all", "sqrt"] = "sqrt"
+    """Checkpoint saving mode. 'all' saves every checkpoint, 'sqrt' saves every
+    sqrt(N) steps, and rematerializes checkpoints when needed."""
+
     num_subsets: int = 100
     """Number of leave-one-out subsets for Spearman correlation."""
 
@@ -184,6 +188,7 @@ def worker(
         stream,
         inplace=True,
         save_dir=ckpts_path,
+        save_mode=run_cfg.save_mode,
         log_fn=log_fn,
     )
 
