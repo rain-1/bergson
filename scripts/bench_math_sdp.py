@@ -52,16 +52,25 @@ def run_build(
     use_tf32_matmuls: bool = False,
 ):
     cmd = [
-        "bergson", "build", run_path,
-        "--model", model,
-        "--dataset", "NeelNanda/pile-10k",
-        "--split", SPLIT,
+        "bergson",
+        "build",
+        run_path,
+        "--model",
+        model,
+        "--dataset",
+        "NeelNanda/pile-10k",
+        "--split",
+        SPLIT,
         "--truncation",
-        "--projection_dim", str(PROJECTION_DIM),
-        "--token_batch_size", str(TOKEN_BATCH_SIZE),
-        "--precision", precision,
+        "--projection_dim",
+        str(PROJECTION_DIM),
+        "--token_batch_size",
+        str(TOKEN_BATCH_SIZE),
+        "--precision",
+        precision,
         "--skip_preconditioners",
-        "--nproc_per_node", "1",
+        "--nproc_per_node",
+        "1",
         "--overwrite",
     ]
     if force_math_sdp:
@@ -71,7 +80,9 @@ def run_build(
 
     print(f"\n{'=' * 60}")
     print(f"  Model: {model}")
-    print(f"  precision={precision}, force_math_sdp={force_math_sdp}, tf32={use_tf32_matmuls}")
+    print(
+        f"  precision={precision}, force_math_sdp={force_math_sdp}, tf32={use_tf32_matmuls}"
+    )
     print(f"  Command: {' '.join(cmd)}")
     print("=" * 60)
 
@@ -110,25 +121,24 @@ def main():
                 model, run_path, force_math_sdp, precision, use_tf32_matmuls
             )
             if elapsed is not None:
-                results.append(BenchResult(
-                    model=model,
-                    force_math_sdp=force_math_sdp,
-                    precision=precision,
-                    use_tf32_matmuls=use_tf32_matmuls,
-                    build_seconds=elapsed,
-                    token_batch_size=TOKEN_BATCH_SIZE,
-                    dataset_split=SPLIT,
-                    projection_dim=PROJECTION_DIM,
-                ))
+                results.append(
+                    BenchResult(
+                        model=model,
+                        force_math_sdp=force_math_sdp,
+                        precision=precision,
+                        use_tf32_matmuls=use_tf32_matmuls,
+                        build_seconds=elapsed,
+                        token_batch_size=TOKEN_BATCH_SIZE,
+                        dataset_split=SPLIT,
+                        projection_dim=PROJECTION_DIM,
+                    )
+                )
 
     # Print summary table
     print(f"\n\n{'=' * 80}")
     print("RESULTS")
     print("=" * 80)
-    print(
-        f"{'Model':<25s} {'Settings':<35s}"
-        f" {'Time (s)':>9s} {'vs bf16':>9s}"
-    )
+    print(f"{'Model':<25s} {'Settings':<35s}" f" {'Time (s)':>9s} {'vs bf16':>9s}")
     print("-" * 80)
 
     # Compute overhead vs bf16 baseline
@@ -147,8 +157,10 @@ def main():
         settings = " + ".join(parts)
 
         baseline = bf16_baseline.get(r.model)
-        if baseline and r == results[0] or (
-            r.precision == "bf16" and not r.force_math_sdp
+        if (
+            baseline
+            and r == results[0]
+            or (r.precision == "bf16" and not r.force_math_sdp)
         ):
             overhead_str = "—"
         elif baseline:
