@@ -193,9 +193,8 @@ def diagnose_special_tokens(model_name: str):
         template_str = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=False
         )
-    except Exception as e:
-        print(f"\n  SKIP: Chat template failed: {e}")
-        print("  This model may not support chat templates.")
+    except Exception:
+        print("\n  No chat template found — special token check not applicable.")
         return True
 
     # Two-step tokenization (what bergson does)

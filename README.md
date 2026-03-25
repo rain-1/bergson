@@ -170,7 +170,7 @@ Some models produce inconsistent per-example gradients when sequences of differe
 Use the built-in diagnostic to check your model:
 
 ```bash
-bergson test_numerical_stability --model <model_name>
+bergson test_model_configuration --model <model_name>
 ```
 
 This automatically tests escalating configurations and reports exactly which flags (if any) you need. If your model fails the default test, add the recommended flags to your `build`/`score`/`trackstar` commands:
@@ -200,7 +200,7 @@ The overhead of `--force_math_sdp` and `--precision fp32` varies by model. Bench
 | OLMo-2-7B | fp32 | 569.2s | +439.5% |
 | OLMo-2-7B | fp32 + `--force_math_sdp` | 603.6s | +472.1% |
 
-Not all models are affected — run `bergson test_numerical_stability` before enabling these flags to avoid unnecessary overhead.
+Not all models are affected — run `bergson test_model_configuration` before enabling these flags to avoid unnecessary overhead.
 
 # Benchmarks
 

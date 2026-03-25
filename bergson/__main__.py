@@ -178,7 +178,7 @@ class Trackstar:
 
 
 @dataclass
-class Test_Numerical_Stability:
+class Test_Model_Configuration:
     """Test gradient consistency across padding and batch composition.
 
     Tests whether a model produces consistent gradients regardless of how
@@ -206,7 +206,7 @@ class Main:
         Reduce,
         Score,
         Trackstar,
-        Test_Numerical_Stability,
+        Test_Model_Configuration,
     ]
 
     def execute(self):

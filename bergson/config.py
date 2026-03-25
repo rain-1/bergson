@@ -283,7 +283,8 @@ class IndexConfig(AttributionConfig, Serializable):
     """Disable flash and memory-efficient SDPA backends, forcing the
     math-only kernel. Some models produce inconsistent gradients across
     different padding lengths when using optimized attention backends.
-    Run `bergson diagnose` to check whether your model needs this."""
+    Run `bergson test_model_configuration` to check whether your model
+    needs this."""
 
     attribute_tokens: bool = False
     """Whether to compute per-token gradients instead of per-example.
