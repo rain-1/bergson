@@ -43,7 +43,7 @@ class DataStream:
 
         rng = range(
             i * self.batch_size,
-            (i + 1) * self.batch_size,
+            min((i + 1) * self.batch_size, len(self.dataset)),
         )
         indices = list(rng)[self.rank :: self.world_size]
 

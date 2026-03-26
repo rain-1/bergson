@@ -181,18 +181,6 @@ def get_schedule(lr_cfg, num_steps: int):
     return _schedule
 
 
-def validate_batch_size(cfg, trainer, fwd_state, stream):
-    """Validate that the batch size fits in GPU memory for a training step."""
-    batch = stream[0]
-    try:
-        trainer.step(fwd_state, batch)
-    except torch.cuda.OutOfMemoryError:
-        raise RuntimeError(
-            f"Test batch shape {batch['input_ids'].shape}, batch_size={cfg.batch_size}"
-            f" produced an out of memory error."
-        ) from None
-
-
 def prepare_trainer(
     cfg: TrainingConfig,
     rank: int,
@@ -268,7 +256,13 @@ def worker(
     # Drop items that are nondivisible by batch_size to prevent deadlock
     remainder = len(train_dataset) % run_cfg.batch_size
     if remainder:
-        train_dataset = train_dataset.select(range(len(train_dataset) - remainder))
+        total = len(train_dataset)
+        train_dataset = train_dataset.select(range(total - remainder))
+        if global_rank == 0:
+            print(
+                f"Train: dropped {remainder}/{total} examples "
+                f"({remainder / total * 100:.1f}%) to even batches"
+            )
 
     stream = DataStream(
         train_dataset,
@@ -289,7 +283,6 @@ def worker(
         world_size,
         schedule,
     )
-    validate_batch_size(run_cfg, trainer, fwd_state, stream)
 
     ckpts_path = os.path.join(run_cfg.run_path, "checkpoints")
     path0 = os.path.join(ckpts_path, "state0.pt")
@@ -317,9 +310,13 @@ def worker(
     # Drop items that are nondivisible by batch_size to prevent deadlock
     query_remainder = len(query_dataset) % run_cfg.batch_size
     if query_remainder:
-        query_dataset = query_dataset.select(
-            range(len(query_dataset) - query_remainder)
-        )
+        query_total = len(query_dataset)
+        query_dataset = query_dataset.select(range(query_total - query_remainder))
+        if global_rank == 0:
+            print(
+                f"Query: dropped {query_remainder}/{query_total} examples "
+                f"({query_remainder / query_total * 100:.1f}%) to even batches"
+            )
     if len(query_dataset) < run_cfg.batch_size:
         raise ValueError(
             f"Query dataset has {len(query_dataset)} examples, fewer than "
@@ -389,7 +386,7 @@ def worker(
         for x in stream:
             fwd_state = trainer.step(fwd_state, x)
 
-        with fwd_state.activate(model):
+        with fwd_state.activate(model), torch.no_grad():
             loss = torch.tensor(0.0, device=stream.weights.device)
             for batch in query_stream:
                 del batch["example_weight"]
