@@ -1,5 +1,5 @@
 # Bergson
-This library enables you to trace the memory of deep neural nets with gradient-based data attribution techniques. We currently focus on TrackStar, as described in [Scalable Influence and Fact Tracing for Large Language Model Pretraining](https://arxiv.org/abs/2410.17413v3) by Chang et al. (2024), and also include support for several alternative influence functions. We plan to add support for [Magic](https://arxiv.org/abs/2504.16430) soon.
+This library enables you to trace the memory of deep neural nets with gradient-based data attribution techniques. We currently focus on TrackStar, as described in [Scalable Influence and Fact Tracing for Large Language Model Pretraining](https://arxiv.org/abs/2410.17413v3) by Chang et al. (2024), [Magic](https://arxiv.org/abs/2504.16430), and also include support for several alternative influence functions.
 
 We view attribution as a counterfactual question: **_If we "unlearned" this training sample, how would the model's behavior change?_** This formulation ties attribution to some notion of what it means to "unlearn" a training sample. Here we focus on a very simple notion of unlearning: taking a gradient _ascent_ step on the loss with respect to the training sample.
 
@@ -16,6 +16,9 @@ We view attribution as a counterfactual question: **_If we "unlearned" this trai
 - Structured gradient views and per-attention head gradient collection. Bergson enables mechanistic interpretability via easy access to per‑module or per-attention head gradients.
 
 # Announcements
+
+**March 2026**
+- Support MAGIC
 
 **February 2026**
 - Support per-token gradients
