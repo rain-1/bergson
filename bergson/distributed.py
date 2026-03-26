@@ -94,7 +94,13 @@ def shallow_copy(tensor_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor
         tid = id(t)
         if tid not in seen:
             if isinstance(t, DTensor):
-                t2 = DTensor.from_local(t.to_local(), t.device_mesh, t.placements)
+                t2 = DTensor.from_local(
+                    t.to_local(),
+                    t.device_mesh,
+                    t.placements,
+                    shape=t.shape,
+                    stride=t.stride(),
+                )
             else:
                 t2 = torch.Tensor(t.data)
             t2.requires_grad_(t.requires_grad)

@@ -83,3 +83,46 @@ def test_magic_two_steps(model_name, dataset):
     scores = bwd_state.weight_grads.detach().cpu()
     assert scores.shape == (len(dataset),)
     assert scores.abs().sum() > 0, "Attribution scores are all zero"
+
+
+def test_magic_resume(dataset):
+    """Resume from a checkpoint mid-training and verify identical final state."""
+    device = "cpu"
+
+    torch.manual_seed(42)
+    config = AutoConfig.from_pretrained("trl-internal-testing/tiny-Phi3ForCausalLM")
+    model = AutoModelForCausalLM.from_config(
+        config, torch_dtype=torch.float32, attn_implementation="eager"
+    )
+    model.loss_function = weighted_causal_lm_ce
+    model.requires_grad_(True)
+
+    optimizer = torchopt.adamw(1e-4, betas=(0.95, 0.975), eps_root=1e-2)
+    trainer, fwd_state = Trainer.initialize(model, optimizer)
+
+    # batch_size=1 gives us 2 batches so resume has something to skip
+    train_stream = DataStream(dataset, batch_size=1, device=device)
+    assert len(train_stream) == 2
+
+    with tempfile.TemporaryDirectory() as ckpt_dir:
+        # Full training run (inplace=False to keep fwd_state intact)
+        final_state = trainer.train(
+            fwd_state,
+            train_stream,
+            inplace=False,
+            save_dir=ckpt_dir,
+            save_mode="all",
+        )
+
+        # Resume from checkpoints with the same initial state
+        resumed_state = trainer.train(
+            fwd_state,
+            train_stream,
+            inplace=False,
+            save_dir=ckpt_dir,
+            save_mode="all",
+            resume=True,
+        )
+
+        for k in final_state.params:
+            torch.testing.assert_close(resumed_state.params[k], final_state.params[k])

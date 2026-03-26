@@ -1,9 +1,10 @@
+import math
 import os
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import torch
 import torch.distributed as dist
@@ -13,7 +14,6 @@ from scipy.stats import describe, spearmanr
 from simple_parsing import ArgumentParser, field
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
-from torchopt.typing import Numeric
 from tqdm import tqdm
 
 from ..config import AttributionConfig, DataConfig, TrainingConfig
@@ -53,6 +53,9 @@ class MagicConfig(AttributionConfig, TrainingConfig):
 
     wandb_project: str = ""
     """Weights & Biases project name. If set, logs training loss to W&B."""
+
+    resume: bool = False
+    """Resume a previously interrupted run from the last checkpoint."""
 
     def __post_init__(self):
         assert not self.fsdp, "PyTorch FSDP is not currently supported for MAGIC."
@@ -100,7 +103,90 @@ def compute_query_gradients(
     return grad_accum, float(loss_accum)
 
 
-def prepare_trainer(cfg: TrainingConfig, rank: int, world_size: int):
+def get_schedule(lr_cfg, num_steps: int):
+    """Return a learning rate schedule function: step → lr.
+
+    Supports HF-compatible scheduler types and an optional non-zero warmup
+    start (``lr_start``).
+    """
+    if lr_cfg.warmup_steps >= 1:
+        warmup_steps = int(lr_cfg.warmup_steps)
+    else:
+        warmup_steps = math.ceil(num_steps * lr_cfg.warmup_steps)
+
+    lr = lr_cfg.lr
+    lr_start = lr_cfg.lr_start
+    decay_steps = max(num_steps - warmup_steps, 1)
+
+    def _warmup(step):
+        """Linear warmup from lr_start to lr."""
+        progress = step / max(warmup_steps, 1)
+        return lr_start + (lr - lr_start) * progress
+
+    scheduler_type = lr_cfg.lr_scheduler_type
+
+    if scheduler_type == "constant":
+
+        def _schedule(step):
+            return lr
+
+    elif scheduler_type == "constant_with_warmup":
+
+        def _schedule(step):
+            if step < warmup_steps:
+                return _warmup(step)
+            return lr
+
+    elif scheduler_type == "linear":
+
+        def _schedule(step):
+            if step < warmup_steps:
+                return _warmup(step)
+            progress = (step - warmup_steps) / decay_steps
+            return lr * (1 - progress)
+
+    elif scheduler_type == "cosine":
+
+        def _schedule(step):
+            if step < warmup_steps:
+                return _warmup(step)
+            progress = (step - warmup_steps) / decay_steps
+            return (
+                lr * 0.5 * (1 + math.cos(math.pi * lr_cfg.num_cycles * 2.0 * progress))
+            )
+
+    elif scheduler_type == "cosine_with_restarts":
+
+        def _schedule(step):
+            if step < warmup_steps:
+                return _warmup(step)
+            progress = (step - warmup_steps) / decay_steps
+            return (
+                lr
+                * 0.5
+                * (1 + math.cos(math.pi * ((lr_cfg.num_cycles * progress) % 1.0) * 2.0))
+            )
+
+    elif scheduler_type == "polynomial":
+
+        def _schedule(step):
+            if step < warmup_steps:
+                return _warmup(step)
+            progress = (step - warmup_steps) / decay_steps
+            return lr_cfg.lr_end + (lr - lr_cfg.lr_end) * (1 - progress) ** lr_cfg.power
+
+    else:
+        raise ValueError(f"Unknown lr_scheduler_type: {scheduler_type!r}")
+
+    return _schedule
+
+
+def prepare_trainer(
+    cfg: TrainingConfig,
+    rank: int,
+    world_size: int,
+    schedule: Callable,
+):
     """Prepare the model, optimizer, and trainer for training."""
     torch.cuda.set_device(rank)
 
@@ -133,7 +219,7 @@ def prepare_trainer(cfg: TrainingConfig, rank: int, world_size: int):
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(f"cuda:{rank}"),
             rank=rank,
-            timeout=timedelta(hours=1),
+            timeout=timedelta(minutes=10),
             world_size=world_size,
         )
 
@@ -141,11 +227,6 @@ def prepare_trainer(cfg: TrainingConfig, rank: int, world_size: int):
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
             model = simple_fsdp(model)
-
-    def schedule(step: Numeric) -> Numeric:
-        if step < cfg.warmup_steps:
-            return 0.0
-        return cfg.lr
 
     opt = torchopt.adamw(
         schedule,
@@ -166,15 +247,22 @@ def worker(
     num_query_docs: int,
     run_cfg: MagicConfig,
 ):
-    trainer, fwd_state, model = prepare_trainer(run_cfg, rank, world_size)
+    if run_cfg.num_epochs > 1:
+        train_dataset = train_dataset.repeat(run_cfg.num_epochs)
 
-    ckpts_path = os.path.join(run_cfg.run_path, "checkpoints")
-    path0 = os.path.join(ckpts_path, "state0.pt")
-    log_fn = None
-    if run_cfg.wandb_project and global_rank == 0:
-        log_fn = wandb_log_fn(run_cfg.wandb_project, config=asdict(run_cfg))
+    # Ensure total effective batch size is divisible by world size
+    assert run_cfg.batch_size % world_size == 0
 
-    save_fut = fwd_state.save(path0)
+    # Drop items that are nondivisible by batch_size to prevent deadlock
+    remainder = len(train_dataset) % run_cfg.batch_size
+    if remainder:
+        total = len(train_dataset)
+        train_dataset = train_dataset.select(range(total - remainder))
+        if global_rank == 0:
+            print(
+                f"Train: dropped {remainder}/{total} examples "
+                f"({remainder / total * 100:.1f}%) to even batches"
+            )
 
     stream = DataStream(
         train_dataset,
@@ -183,6 +271,28 @@ def worker(
         input_key=run_cfg.data.prompt_column,
         num_docs=num_train_docs,
     )
+
+    log_fn = None
+    if run_cfg.wandb_project and global_rank == 0:
+        log_fn = wandb_log_fn(run_cfg.wandb_project, config=asdict(run_cfg))
+
+    schedule = get_schedule(run_cfg.lr_schedule, len(stream))
+    trainer, fwd_state, model = prepare_trainer(
+        run_cfg,
+        rank,
+        world_size,
+        schedule,
+    )
+
+    ckpts_path = os.path.join(run_cfg.run_path, "checkpoints")
+    path0 = os.path.join(ckpts_path, "state0.pt")
+
+    resume = run_cfg.resume and os.path.exists(path0)
+
+    save_fut = None
+    if not resume:
+        save_fut = fwd_state.save(path0)
+
     fwd_state = trainer.train(
         fwd_state,
         stream,
@@ -191,7 +301,28 @@ def worker(
         save_dir=ckpts_path,
         save_mode=run_cfg.save_mode,
         log_fn=log_fn,
+        resume=resume,
     )
+
+    if save_fut is not None:
+        save_fut.result()  # ensure state0 is saved before validation loads it
+
+    # Drop items that are nondivisible by batch_size to prevent deadlock
+    query_remainder = len(query_dataset) % run_cfg.batch_size
+    if query_remainder:
+        query_total = len(query_dataset)
+        query_dataset = query_dataset.select(range(query_total - query_remainder))
+        if global_rank == 0:
+            print(
+                f"Query: dropped {query_remainder}/{query_total} examples "
+                f"({query_remainder / query_total * 100:.1f}%) to even batches"
+            )
+    if len(query_dataset) < run_cfg.batch_size:
+        raise ValueError(
+            f"Query dataset has {len(query_dataset)} examples, fewer than "
+            f"batch_size={run_cfg.batch_size}. Use a larger query split or "
+            f"smaller batch_size."
+        )
 
     # Compute query gradients
     query_stream = DataStream(
@@ -246,8 +377,6 @@ def worker(
     subsets = perm.chunk(run_cfg.num_subsets)
 
     pbar = tqdm(subsets, desc="Validating", disable=global_rank != 0)
-    save_fut.result()  # ensure state0 is saved before loading in loop
-
     for subset in pbar:
         fwd_state.load(path0)
 
@@ -257,7 +386,7 @@ def worker(
         for x in stream:
             fwd_state = trainer.step(fwd_state, x)
 
-        with fwd_state.activate(model):
+        with fwd_state.activate(model), torch.no_grad():
             loss = torch.tensor(0.0, device=stream.weights.device)
             for batch in query_stream:
                 del batch["example_weight"]
@@ -281,15 +410,16 @@ def worker(
 
 def run_magic(run_cfg: MagicConfig):
     run_path = Path(run_cfg.run_path)
-    if run_path.exists():
+    if run_path.exists() and not run_cfg.resume:
         if run_cfg.overwrite:
             shutil.rmtree(run_path)
         else:
             raise FileExistsError(
-                f"Run path {run_path} already exists. Use --overwrite to overwrite it."
+                f"Run path {run_path} already exists. "
+                f"Use --overwrite to overwrite it."
             )
 
-    run_path.mkdir(parents=True)
+    run_path.mkdir(parents=True, exist_ok=True)
     run_cfg.save_yaml(run_path / "run_config.yaml")
 
     train_ds, train_n = setup_data_pipeline(run_cfg)

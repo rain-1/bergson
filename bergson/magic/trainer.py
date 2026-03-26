@@ -274,6 +274,30 @@ class Trainer:
         )
         return state
 
+    def resume(
+        self,
+        state: TrainerState,
+        save_dir: str,
+    ):
+        ckpt_list = sorted_checkpoints(save_dir)
+
+        # Filter out incomplete checkpoints (missing .metadata) and clean them up
+        valid_ckpts = []
+        for idx, path in ckpt_list:
+            metadata = os.path.join(path, ".metadata")
+            if os.path.exists(metadata):
+                valid_ckpts.append((idx, path))
+            else:
+                rmtree(path) if os.path.isdir(path) else os.remove(path)
+
+        # Load the most recent trainer state
+        last_idx, last_path = valid_ckpts[-1]
+        state.batch_index = last_idx
+        state.load(last_path)
+        state.detach_()
+
+        return state
+
     def train(
         self,
         state: TrainerState,
@@ -285,10 +309,16 @@ class Trainer:
         save_mode: Literal["all", "sqrt"] = "sqrt",
         trace: bool = False,
         log_fn: Callable[[int, float], None] | None = None,
+        resume: bool = False,
     ) -> TrainerState:
         # Make sure the save directory exists
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
+
+        start = 0
+        if resume and save_dir is not None:
+            state = self.resume(state, save_dir)
+            start = state.batch_index
 
         chunk_size = math.isqrt(len(data)) if save_mode == "sqrt" else 1
         last_start = len(data) - chunk_size
@@ -296,9 +326,9 @@ class Trainer:
         pending_save: SaveFuture | None = None
 
         main = not dist.is_initialized() or dist.get_rank() == 0
-        pbar = tqdm(data, desc="Training", disable=not main)
+        pbar = tqdm(range(start, len(data)), desc="Training", disable=not main)
 
-        for i, x in enumerate(pbar):
+        for i in pbar:
             # Save checkpoint BEFORE each step. Step 0 is the initial state prior to
             # any updates, step 1 is the state after the first update, etc.
             if save_dir and (i % chunk_size == 0 or i >= last_start):
@@ -311,6 +341,7 @@ class Trainer:
                 p = os.path.join(save_dir, f"step_{i}.ckpt")
                 pending_save = state.save(p, debug_pbar=pbar if debug else None)
 
+            x = data[i]
             state = self.step(state, x, inplace=inplace, trace=trace)
 
             if log_fn is not None:

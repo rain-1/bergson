@@ -366,7 +366,7 @@ def setup_data_pipeline(
             tokenizer,
             chunk_size=data_cfg.chunk_length,
         )
-        return tokenized, len(tokenized)
+        return tokenized, len(ds)
 
     max_token_bz = getattr(cfg, "token_batch_size", BIG_NUM)
     if BIG_NUM > max_token_bz > max_model_length:
@@ -388,7 +388,6 @@ def setup_data_pipeline(
             truncation=data_cfg.truncation,
         )
 
-    num_docs = len(ds)
     if not ds.column_names or "input_ids" not in ds.column_names:
         ds = ds.map(
             tokenize,
@@ -447,4 +446,4 @@ def setup_data_pipeline(
     if remove_columns:
         ds = ds.remove_columns(list(remove_columns))
 
-    return ds, num_docs
+    return ds, len(ds)

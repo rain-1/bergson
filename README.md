@@ -37,14 +37,20 @@ pip install bergson
 
 To construct an index of randomly projected gradients:
 
-```
+```bash
 bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
 ```
 
 To collect Trackstar attribution scores:
 
-```
+```bash
 bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
+```
+
+To use MAGIC on a GPT-2 WikiText fine-tune:
+
+```bash
+bergson magic examples/gpt2_wikitext.yaml
 ```
 
 # Usage
