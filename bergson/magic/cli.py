@@ -211,18 +211,6 @@ def prepare_trainer(
         )
 
     if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-
-        dist.init_process_group(
-            "cpu:gloo,cuda:nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{rank}"),
-            rank=rank,
-            timeout=timedelta(minutes=10),
-            world_size=world_size,
-        )
-
         apply_dtensor_patch()
         mesh = init_device_mesh("cuda", (world_size,))
         with mesh:
@@ -247,6 +235,19 @@ def worker(
     num_query_docs: int,
     run_cfg: MagicConfig,
 ):
+    if world_size > 1:
+        addr = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "29500")
+
+        dist.init_process_group(
+            "cpu:gloo,cuda:nccl",
+            init_method=f"tcp://{addr}:{port}",
+            device_id=torch.device(f"cuda:{rank}"),
+            rank=rank,
+            timeout=timedelta(minutes=10),
+            world_size=world_size,
+        )
+
     if run_cfg.num_epochs > 1:
         train_dataset = train_dataset.repeat(run_cfg.num_epochs)
 
