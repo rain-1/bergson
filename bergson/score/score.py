@@ -3,6 +3,7 @@ import os
 import shutil
 from datetime import timedelta
 from pathlib import Path
+import yaml
 
 import numpy as np
 import torch
@@ -65,7 +66,7 @@ def get_query_grads(
     preprocess_path = Path(query_path / "preprocess_config.yaml")
     if preprocess_path.exists():
         with open(preprocess_path, "r") as f:
-            preprocess_data = json.load(f)
+            preprocess_data = yaml.safe_load(f)
             preprocess_cfg = PreprocessConfig(**preprocess_data)
     else:
         preprocess_cfg = PreprocessConfig()
