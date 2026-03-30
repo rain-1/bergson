@@ -3,11 +3,11 @@ import os
 import shutil
 from datetime import timedelta
 from pathlib import Path
-import yaml
 
 import numpy as np
 import torch
 import torch.distributed as dist
+import yaml
 from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
